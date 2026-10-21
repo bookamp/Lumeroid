@@ -68,17 +68,19 @@ fun TvSportsScreen(
     var fixtures by remember { mutableStateOf<List<SportsFixture>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var isInFixturesPane by remember { mutableStateOf(false) }
-    val selectedLeagueFocusRequester = remember { FocusRequester() }
     val coroutineScope = rememberCoroutineScope()
 
     // Breadcrumb BackHandler: When in fixtures or matched channels list, Back retracts focus up to League pills
     BackHandler(enabled = isInFixturesPane) {
         try {
-            selectedLeagueFocusRequester.requestFocus()
-        } catch (_: Exception) {
-            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
-        }
+            firstItemFocusRequester.requestFocus()
+        } catch (_: Exception) {}
         isInFixturesPane = false
+    }
+
+    // Breadcrumb BackHandler: When in League pills, Back retracts focus up to the TopBar
+    BackHandler(enabled = !isInFixturesPane) {
+        onMoveUpToTopBar?.invoke()
     }
 
     val leagues = remember {
@@ -135,11 +137,9 @@ fun TvSportsScreen(
                         val isSelected = selectedLeague == code
                         val interaction = remember { MutableInteractionSource() }
                         val isFocused by interaction.collectIsFocusedAsState()
-                        val itemFocusRequester = when {
-                            isSelected -> selectedLeagueFocusRequester
-                            index == 0 -> firstItemFocusRequester
-                            else -> null
-                        }
+                        val itemFocusRequester = if (isSelected || index == 0) {
+                            firstItemFocusRequester
+                        } else null
 
                         Box(
                             modifier = Modifier

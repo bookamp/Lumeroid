@@ -126,7 +126,6 @@ fun TvSettingsScreen(
     val drillInStack = remember { mutableStateListOf<SettingsDrillIn>() }
     val currentDrillIn = drillInStack.lastOrNull()
     var isInContentPane by remember { mutableStateOf(false) }
-    val selectedCategoryFocusRequester = remember { FocusRequester() }
 
     val popDrillIn: () -> Unit = {
         if (drillInStack.isNotEmpty()) {
@@ -142,11 +141,14 @@ fun TvSettingsScreen(
     // Breadcrumb BackHandler: When in right detail pane, Back retracts focus to the Left sidebar rail
     BackHandler(enabled = isInContentPane && drillInStack.isEmpty()) {
         try {
-            selectedCategoryFocusRequester.requestFocus()
-        } catch (_: Exception) {
-            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
-        }
+            firstItemFocusRequester.requestFocus()
+        } catch (_: Exception) {}
         isInContentPane = false
+    }
+
+    // Breadcrumb BackHandler: When in Settings sidebar rail, Back retracts focus up to TopBar
+    BackHandler(enabled = !isInContentPane && drillInStack.isEmpty()) {
+        onMoveUpToTopBar?.invoke()
     }
 
     TvAmbientBackground {
@@ -161,7 +163,6 @@ fun TvSettingsScreen(
                 TvSidebarRail(
                     selectedCategory = selectedCategory,
                     firstItemFocusRequester = firstItemFocusRequester,
-                    selectedCategoryFocusRequester = selectedCategoryFocusRequester,
                     onMoveUpToTopBar = onMoveUpToTopBar,
                     onSelectCategory = { cat ->
                         selectedCategory = cat
@@ -317,7 +318,6 @@ fun TvSettingsScreen(
 private fun TvSidebarRail(
     selectedCategory: SettingsCategory,
     firstItemFocusRequester: FocusRequester? = null,
-    selectedCategoryFocusRequester: FocusRequester? = null,
     onMoveUpToTopBar: (() -> Unit)? = null,
     onSelectCategory: (SettingsCategory) -> Unit
 ) {
@@ -329,11 +329,7 @@ private fun TvSidebarRail(
     ) {
         itemsIndexed(SettingsCategory.values()) { index, category ->
             val isSelected = selectedCategory == category
-            val itemFocusRequester = when {
-                isSelected -> selectedCategoryFocusRequester
-                index == 0 -> firstItemFocusRequester
-                else -> null
-            }
+            val itemFocusRequester = if (isSelected || index == 0) firstItemFocusRequester else null
             TvCategoryRailItem(
                 title = category.title,
                 isSelected = isSelected,

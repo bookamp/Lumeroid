@@ -64,7 +64,6 @@ fun TvLiveTvScreen(
 
     var selectedCategory by remember { mutableStateOf<CategoryEntity?>(null) }
     var isInChannelsPane by remember { mutableStateOf(false) }
-    val selectedCategoryFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(categories) {
         if (selectedCategory == null && categories.isNotEmpty()) {
@@ -75,11 +74,14 @@ fun TvLiveTvScreen(
     // Breadcrumb BackHandler: When in channels list or EPG timeline, Back retracts focus to the Category sidebar
     BackHandler(enabled = isInChannelsPane) {
         try {
-            selectedCategoryFocusRequester.requestFocus()
-        } catch (_: Exception) {
-            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
-        }
+            firstItemFocusRequester.requestFocus()
+        } catch (_: Exception) {}
         isInChannelsPane = false
+    }
+
+    // Breadcrumb BackHandler: When in Category sidebar, Back retracts focus up to the TopBar
+    BackHandler(enabled = !isInChannelsPane) {
+        onMoveUpToTopBar?.invoke()
     }
 
     // Query channels scoped to the selected category (lightning fast SQLite query)
@@ -139,11 +141,10 @@ fun TvLiveTvScreen(
                 ) {
                     itemsIndexed(categories) { index, category ->
                         val isSelected = selectedCategory?.id == category.id
-                        val itemFocusRequester = when {
-                            isSelected -> selectedCategoryFocusRequester
-                            index == 0 -> firstItemFocusRequester
-                            else -> null
-                        }
+                        val itemFocusRequester = if (isSelected || (selectedCategory == null && index == 0)) {
+                            firstItemFocusRequester
+                        } else null
+
                         TvCategorySidebarItem(
                             name = category.name,
                             isSelected = isSelected,

@@ -32,8 +32,10 @@ import org.getlume.android.ui.navigation.Screen
 
 import androidx.compose.ui.input.key.*
 
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 
 /**
  * Authentic Apple TV floating top pill navigation bar.
@@ -47,6 +49,7 @@ fun TvTopBar(
     onOpenSearch: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onMoveDown: (() -> Boolean)? = null,
+    onFocusChanged: ((Boolean) -> Unit)? = null,
     focusRequester: FocusRequester = remember { FocusRequester() }
 ) {
     Box(
@@ -57,6 +60,9 @@ fun TvTopBar(
     ) {
         Row(
             modifier = Modifier
+                .onFocusChanged { focusState ->
+                    onFocusChanged?.invoke(focusState.hasFocus)
+                }
                 .clip(RoundedCornerShape(32.dp))
                 .background(Color.Black.copy(alpha = 0.55f))
                 .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(32.dp))
@@ -174,6 +180,7 @@ private fun TvTopBarTextItem(
                     false
                 }
             }
+            .focusable(interactionSource = interactionSource)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -240,6 +247,7 @@ private fun TvTopBarIconItem(
                     false
                 }
             }
+            .focusable(interactionSource = interactionSource)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

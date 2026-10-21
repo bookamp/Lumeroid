@@ -72,16 +72,18 @@ fun TvMoviesScreen(
     var selectedMovie by remember { mutableStateOf<MovieEntity?>(null) }
     var isLoadingCategory by remember { mutableStateOf(false) }
     var isInGridPane by remember { mutableStateOf(false) }
-    val selectedCategoryFocusRequester = remember { FocusRequester() }
 
     // Breadcrumb BackHandler: When in poster grid, Back retracts focus to the Category sidebar
     BackHandler(enabled = isInGridPane && selectedMovie == null) {
         try {
-            selectedCategoryFocusRequester.requestFocus()
-        } catch (_: Exception) {
-            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
-        }
+            firstItemFocusRequester.requestFocus()
+        } catch (_: Exception) {}
         isInGridPane = false
+    }
+
+    // Breadcrumb BackHandler: When in Category sidebar, Back retracts focus up to the TopBar
+    BackHandler(enabled = !isInGridPane && selectedMovie == null) {
+        onMoveUpToTopBar?.invoke()
     }
 
     // Default to first category
@@ -154,11 +156,10 @@ fun TvMoviesScreen(
                     ) {
                         itemsIndexed(categories) { index, category ->
                             val isSelected = selectedCategory?.id == category.id
-                            val itemFocusRequester = when {
-                                isSelected -> selectedCategoryFocusRequester
-                                index == 0 -> firstItemFocusRequester
-                                else -> null
-                            }
+                            val itemFocusRequester = if (isSelected || (selectedCategory == null && index == 0)) {
+                                firstItemFocusRequester
+                            } else null
+
                             TvMovieCategoryItem(
                                 category = category,
                                 isSelected = isSelected,

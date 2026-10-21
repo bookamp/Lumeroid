@@ -31,6 +31,7 @@ fun TvMainScreen(
 ) {
     var selectedScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var showAddPlaylistModal by remember { mutableStateOf(false) }
+    var isTopBarFocused by remember { mutableStateOf(false) }
 
     // Authentic Apple TV playback overlay:
     // When playing media, TvPlayerScreen is presented as an in-place full-screen overlay
@@ -55,13 +56,13 @@ fun TvMainScreen(
 
     // Branch-level BackHandler: active only when NO playback overlay is showing.
     // In accordance with the tree navigation model, Home is the root parent branch.
-    // Retracting from any branch root (Live TV, Movies, Series, Sports, Settings) goes directly to Home.
+    // When focused on the TopBar of any branch, Back retracts directly to Home.
     if (activePlaybackMedia == null) {
         if (showAddPlaylistModal) {
             BackHandler {
                 showAddPlaylistModal = false
             }
-        } else if (selectedScreen != Screen.Home) {
+        } else if (isTopBarFocused && selectedScreen != Screen.Home) {
             BackHandler {
                 selectedScreen = Screen.Home
                 try {
@@ -164,6 +165,7 @@ fun TvMainScreen(
                 TvTopBar(
                     currentScreen = selectedScreen,
                     focusRequester = topBarFocusRequester,
+                    onFocusChanged = { isTopBarFocused = it },
                     onSelectScreen = { screen ->
                         switchScreen(screen)
                     },
