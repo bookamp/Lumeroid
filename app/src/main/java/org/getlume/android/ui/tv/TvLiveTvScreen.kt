@@ -1,5 +1,6 @@
 package org.getlume.android.ui.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.key.KeyEvent
@@ -61,11 +63,23 @@ fun TvLiveTvScreen(
     val categories by db.categoryDao().getCategories(activePlaylist?.id ?: "", "live").collectAsState(initial = emptyList())
 
     var selectedCategory by remember { mutableStateOf<CategoryEntity?>(null) }
+    var isInChannelsPane by remember { mutableStateOf(false) }
+    val selectedCategoryFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(categories) {
         if (selectedCategory == null && categories.isNotEmpty()) {
             selectedCategory = categories.first()
         }
+    }
+
+    // Breadcrumb BackHandler: When in channels list or EPG timeline, Back retracts focus to the Category sidebar
+    BackHandler(enabled = isInChannelsPane) {
+        try {
+            selectedCategoryFocusRequester.requestFocus()
+        } catch (_: Exception) {
+            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
+        isInChannelsPane = false
     }
 
     // Query channels scoped to the selected category (lightning fast SQLite query)
@@ -102,6 +116,7 @@ fun TvLiveTvScreen(
                 .width(240.dp)
                 .fillMaxHeight()
                 .background(Color.Black.copy(alpha = 0.40f))
+                .onFocusChanged { if (it.hasFocus) isInChannelsPane = false }
                 .padding(vertical = 16.dp, horizontal = 14.dp)
         ) {
             Text(
@@ -124,10 +139,15 @@ fun TvLiveTvScreen(
                 ) {
                     itemsIndexed(categories) { index, category ->
                         val isSelected = selectedCategory?.id == category.id
+                        val itemFocusRequester = when {
+                            isSelected -> selectedCategoryFocusRequester
+                            index == 0 -> firstItemFocusRequester
+                            else -> null
+                        }
                         TvCategorySidebarItem(
                             name = category.name,
                             isSelected = isSelected,
-                            focusRequester = if (index == 0) firstItemFocusRequester else null,
+                            focusRequester = itemFocusRequester,
                             onMoveUp = if (index == 0) onMoveUpToTopBar else null,
                             onClick = { selectedCategory = category }
                         )
@@ -147,6 +167,7 @@ fun TvLiveTvScreen(
                     color = Color.White.copy(alpha = 0.08f),
                     shape = RoundedCornerShape(0.dp)
                 )
+                .onFocusChanged { if (it.hasFocus) isInChannelsPane = true }
         ) {
             Box(
                 modifier = Modifier
@@ -190,6 +211,7 @@ fun TvLiveTvScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
+                .onFocusChanged { if (it.hasFocus) isInChannelsPane = true }
         ) {
             // Timeline Header with Time Markers and Red Now Indicator
             Row(

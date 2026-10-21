@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.input.key.*
 import androidx.compose.material.icons.Icons
@@ -124,6 +125,8 @@ fun TvSettingsScreen(
     var selectedCategory by remember { mutableStateOf(SettingsCategory.PLAYLISTS) }
     val drillInStack = remember { mutableStateListOf<SettingsDrillIn>() }
     val currentDrillIn = drillInStack.lastOrNull()
+    var isInContentPane by remember { mutableStateOf(false) }
+    val selectedCategoryFocusRequester = remember { FocusRequester() }
 
     val popDrillIn: () -> Unit = {
         if (drillInStack.isNotEmpty()) {
@@ -136,6 +139,16 @@ fun TvSettingsScreen(
         popDrillIn()
     }
 
+    // Breadcrumb BackHandler: When in right detail pane, Back retracts focus to the Left sidebar rail
+    BackHandler(enabled = isInContentPane && drillInStack.isEmpty()) {
+        try {
+            selectedCategoryFocusRequester.requestFocus()
+        } catch (_: Exception) {
+            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
+        isInContentPane = false
+    }
+
     TvAmbientBackground {
         Row(
             modifier = Modifier
@@ -144,15 +157,18 @@ fun TvSettingsScreen(
             horizontalArrangement = Arrangement.spacedBy(44.dp)
         ) {
             // LEFT COLUMN: TV SIDEBAR RAIL (270dp)
-            TvSidebarRail(
-                selectedCategory = selectedCategory,
-                firstItemFocusRequester = firstItemFocusRequester,
-                onMoveUpToTopBar = onMoveUpToTopBar,
-                onSelectCategory = { cat ->
-                    selectedCategory = cat
-                    drillInStack.clear()
-                }
-            )
+            Box(modifier = Modifier.onFocusChanged { if (it.hasFocus) isInContentPane = false }) {
+                TvSidebarRail(
+                    selectedCategory = selectedCategory,
+                    firstItemFocusRequester = firstItemFocusRequester,
+                    selectedCategoryFocusRequester = selectedCategoryFocusRequester,
+                    onMoveUpToTopBar = onMoveUpToTopBar,
+                    onSelectCategory = { cat ->
+                        selectedCategory = cat
+                        drillInStack.clear()
+                    }
+                )
+            }
 
             // RIGHT COLUMN: DETAIL PANE CONTAINER (Max 860dp)
             Box(
@@ -160,6 +176,7 @@ fun TvSettingsScreen(
                     .weight(1f)
                     .fillMaxHeight()
                     .padding(top = 10.dp)
+                    .onFocusChanged { if (it.hasFocus) isInContentPane = true }
             ) {
                 // If drilled in, render the in-place drill-in sub-pane
                 when (val drillIn = currentDrillIn) {
@@ -300,6 +317,7 @@ fun TvSettingsScreen(
 private fun TvSidebarRail(
     selectedCategory: SettingsCategory,
     firstItemFocusRequester: FocusRequester? = null,
+    selectedCategoryFocusRequester: FocusRequester? = null,
     onMoveUpToTopBar: (() -> Unit)? = null,
     onSelectCategory: (SettingsCategory) -> Unit
 ) {
@@ -310,10 +328,16 @@ private fun TvSidebarRail(
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         itemsIndexed(SettingsCategory.values()) { index, category ->
+            val isSelected = selectedCategory == category
+            val itemFocusRequester = when {
+                isSelected -> selectedCategoryFocusRequester
+                index == 0 -> firstItemFocusRequester
+                else -> null
+            }
             TvCategoryRailItem(
                 title = category.title,
-                isSelected = selectedCategory == category,
-                focusRequester = if (index == 0) firstItemFocusRequester else null,
+                isSelected = isSelected,
+                focusRequester = itemFocusRequester,
                 onMoveUp = if (index == 0) onMoveUpToTopBar else null,
                 onClick = { onSelectCategory(category) }
             )

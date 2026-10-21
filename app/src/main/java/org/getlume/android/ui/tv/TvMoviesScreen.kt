@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -70,6 +71,18 @@ fun TvMoviesScreen(
     var selectedCategory by remember { mutableStateOf<CategoryEntity?>(null) }
     var selectedMovie by remember { mutableStateOf<MovieEntity?>(null) }
     var isLoadingCategory by remember { mutableStateOf(false) }
+    var isInGridPane by remember { mutableStateOf(false) }
+    val selectedCategoryFocusRequester = remember { FocusRequester() }
+
+    // Breadcrumb BackHandler: When in poster grid, Back retracts focus to the Category sidebar
+    BackHandler(enabled = isInGridPane && selectedMovie == null) {
+        try {
+            selectedCategoryFocusRequester.requestFocus()
+        } catch (_: Exception) {
+            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
+        isInGridPane = false
+    }
 
     // Default to first category
     LaunchedEffect(categories) {
@@ -118,6 +131,7 @@ fun TvMoviesScreen(
                     .width(260.dp)
                     .fillMaxHeight()
                     .background(Color.Black.copy(alpha = 0.45f))
+                    .onFocusChanged { if (it.hasFocus) isInGridPane = false }
                     .padding(vertical = 16.dp, horizontal = 16.dp)
             ) {
                 Text(
@@ -140,10 +154,15 @@ fun TvMoviesScreen(
                     ) {
                         itemsIndexed(categories) { index, category ->
                             val isSelected = selectedCategory?.id == category.id
+                            val itemFocusRequester = when {
+                                isSelected -> selectedCategoryFocusRequester
+                                index == 0 -> firstItemFocusRequester
+                                else -> null
+                            }
                             TvMovieCategoryItem(
                                 category = category,
                                 isSelected = isSelected,
-                                focusRequester = if (index == 0) firstItemFocusRequester else null,
+                                focusRequester = itemFocusRequester,
                                 onMoveUp = if (index == 0) onMoveUpToTopBar else null,
                                 onClick = { selectedCategory = category }
                             )
@@ -157,6 +176,7 @@ fun TvMoviesScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
+                    .onFocusChanged { if (it.hasFocus) isInGridPane = true }
                     .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
                 // Header: Category Title & Count

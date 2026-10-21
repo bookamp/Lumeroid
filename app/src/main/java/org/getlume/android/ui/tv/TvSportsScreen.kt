@@ -1,5 +1,6 @@
 package org.getlume.android.ui.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -35,6 +36,7 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.key.KeyEvent
@@ -65,7 +67,19 @@ fun TvSportsScreen(
     var selectedLeague by remember { mutableStateOf("soccer/eng.1") }
     var fixtures by remember { mutableStateOf<List<SportsFixture>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isInFixturesPane by remember { mutableStateOf(false) }
+    val selectedLeagueFocusRequester = remember { FocusRequester() }
     val coroutineScope = rememberCoroutineScope()
+
+    // Breadcrumb BackHandler: When in fixtures or matched channels list, Back retracts focus up to League pills
+    BackHandler(enabled = isInFixturesPane) {
+        try {
+            selectedLeagueFocusRequester.requestFocus()
+        } catch (_: Exception) {
+            try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
+        isInFixturesPane = false
+    }
 
     val leagues = remember {
         listOf(
@@ -113,15 +127,23 @@ fun TvSportsScreen(
                 }
 
                 // League Selector Pills
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.onFocusChanged { if (it.hasFocus) isInFixturesPane = false }
+                ) {
                     itemsIndexed(leagues) { index, (code, title) ->
                         val isSelected = selectedLeague == code
                         val interaction = remember { MutableInteractionSource() }
                         val isFocused by interaction.collectIsFocusedAsState()
+                        val itemFocusRequester = when {
+                            isSelected -> selectedLeagueFocusRequester
+                            index == 0 -> firstItemFocusRequester
+                            else -> null
+                        }
 
                         Box(
                             modifier = Modifier
-                                .then(if (index == 0) Modifier.focusRequester(firstItemFocusRequester) else Modifier)
+                                .then(if (itemFocusRequester != null) Modifier.focusRequester(itemFocusRequester) else Modifier)
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(if (isSelected || isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.10f))
                                 .onPreviewKeyEvent { keyEvent ->
@@ -150,11 +172,21 @@ fun TvSportsScreen(
 
             // Main Content: Fixtures with Matched IPTV Channels
             if (isLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onFocusChanged { if (it.hasFocus) isInFixturesPane = true },
+                    contentAlignment = Alignment.Center
+                ) {
                     CircularProgressIndicator(color = LumeAccentBlue)
                 }
             } else if (fixtures.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onFocusChanged { if (it.hasFocus) isInFixturesPane = true },
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -169,6 +201,9 @@ fun TvSportsScreen(
                 }
             } else {
                 LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onFocusChanged { if (it.hasFocus) isInFixturesPane = true },
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     contentPadding = PaddingValues(bottom = 36.dp)
                 ) {

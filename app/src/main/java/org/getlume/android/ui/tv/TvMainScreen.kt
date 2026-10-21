@@ -30,7 +30,6 @@ fun TvMainScreen(
     onOpenMultiView: () -> Unit
 ) {
     var selectedScreen by remember { mutableStateOf<Screen>(Screen.Home) }
-    val screenBackStack = remember { mutableStateListOf<Screen>() }
     var showAddPlaylistModal by remember { mutableStateOf(false) }
 
     // Authentic Apple TV playback overlay:
@@ -41,27 +40,7 @@ fun TvMainScreen(
 
     fun switchScreen(newScreen: Screen) {
         if (newScreen != selectedScreen) {
-            screenBackStack.add(selectedScreen)
             selectedScreen = newScreen
-        }
-    }
-
-    // Tab-level BackHandler: active only when NO playback overlay is showing.
-    // Inner composables (Settings drill-in, Series/Movie detail sheets, Home scroll)
-    // register their own enabled BackHandlers which Compose prioritizes first.
-    if (activePlaybackMedia == null) {
-        if (showAddPlaylistModal) {
-            BackHandler {
-                showAddPlaylistModal = false
-            }
-        } else if (screenBackStack.isNotEmpty() || selectedScreen != Screen.Home) {
-            BackHandler {
-                if (screenBackStack.isNotEmpty()) {
-                    selectedScreen = screenBackStack.removeAt(screenBackStack.size - 1)
-                } else {
-                    selectedScreen = Screen.Home
-                }
-            }
         }
     }
 
@@ -73,6 +52,24 @@ fun TvMainScreen(
     val liveTvFirstFocusRequester = remember { FocusRequester() }
     val sportsFirstFocusRequester = remember { FocusRequester() }
     val settingsFirstFocusRequester = remember { FocusRequester() }
+
+    // Branch-level BackHandler: active only when NO playback overlay is showing.
+    // In accordance with the tree navigation model, Home is the root parent branch.
+    // Retracting from any branch root (Live TV, Movies, Series, Sports, Settings) goes directly to Home.
+    if (activePlaybackMedia == null) {
+        if (showAddPlaylistModal) {
+            BackHandler {
+                showAddPlaylistModal = false
+            }
+        } else if (selectedScreen != Screen.Home) {
+            BackHandler {
+                selectedScreen = Screen.Home
+                try {
+                    homeHeroFocusRequester.requestFocus()
+                } catch (_: Exception) {}
+            }
+        }
+    }
 
     TvAmbientBackground {
         Box(modifier = Modifier.fillMaxSize()) {
