@@ -43,13 +43,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
-import org.getlume.android.core.data.entities.PlaylistEntity
+import org.getlume.android.core.data.entities.*
 import org.getlume.android.core.designsystem.*
 import org.getlume.android.core.network.LanSetupServer
 import org.getlume.android.core.settings.*
+import org.getlume.android.core.sync.PlaylistSyncManager
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import java.util.UUID
 
 /**
  * Top-level Settings Categories matching Apple TV SettingsCategory.swift exactly:
@@ -92,6 +98,7 @@ enum class SettingsCategory(val id: String, val title: String) {
  */
 sealed class SettingsDrillIn {
     data class PlaylistDetail(val playlist: PlaylistEntity) : SettingsDrillIn()
+    data class EditProfile(val profile: UserProfileEntity?) : SettingsDrillIn()
     object ContentManagement : SettingsDrillIn()
     data class ChannelManagement(val categoryName: String) : SettingsDrillIn()
     object FavoriteManagement : SettingsDrillIn()
@@ -126,10 +133,14 @@ fun TvSettingsScreen(
     val drillInStack = remember { mutableStateListOf<SettingsDrillIn>() }
     val currentDrillIn = drillInStack.lastOrNull()
     var isInContentPane by remember { mutableStateOf(false) }
+    var returnFocusProfileId by remember { mutableStateOf<String?>(null) }
 
     val popDrillIn: () -> Unit = {
         if (drillInStack.isNotEmpty()) {
-            drillInStack.removeAt(drillInStack.size - 1)
+            val popped = drillInStack.removeAt(drillInStack.size - 1)
+            if (popped is SettingsDrillIn.EditProfile && returnFocusProfileId == null) {
+                returnFocusProfileId = popped.profile?.id ?: "add_profile"
+            }
         }
     }
 
@@ -185,6 +196,23 @@ fun TvSettingsScreen(
                         TvPlaylistDetailPane(
                             playlist = drillIn.playlist,
                             onBack = popDrillIn
+                        )
+                    }
+                    is SettingsDrillIn.EditProfile -> {
+                        TvProfileEditorPane(
+                            profile = drillIn.profile,
+                            onBack = {
+                                returnFocusProfileId = drillIn.profile?.id ?: "add_profile"
+                                popDrillIn()
+                            },
+                            onProfileSaved = { savedId ->
+                                returnFocusProfileId = savedId
+                                popDrillIn()
+                            },
+                            onProfileDeleted = {
+                                returnFocusProfileId = "add_profile"
+                                popDrillIn()
+                            }
                         )
                     }
                     is SettingsDrillIn.ContentManagement -> {
@@ -266,7 +294,14 @@ fun TvSettingsScreen(
                         // Render Top-Level Category Pane
                         when (selectedCategory) {
                             SettingsCategory.PREMIUM -> TvPremiumSettingsPane()
-                            SettingsCategory.PROFILES -> TvProfilesSettingsPane()
+                            SettingsCategory.PROFILES -> TvProfilesSettingsPane(
+                                targetFocusProfileId = returnFocusProfileId,
+                                onFocusConsumed = { returnFocusProfileId = null },
+                                onOpenEditProfile = { profile ->
+                                    returnFocusProfileId = profile?.id ?: "add_profile"
+                                    drillInStack.add(SettingsDrillIn.EditProfile(profile))
+                                }
+                            )
                             SettingsCategory.PLAYLISTS -> TvPlaylistsSettingsPane(
                                 onOpenAddPlaylist = onOpenAddPlaylist,
                                 onOpenDetail = { playlist ->
@@ -329,7 +364,7 @@ private fun TvSidebarRail(
     ) {
         itemsIndexed(SettingsCategory.values()) { index, category ->
             val isSelected = selectedCategory == category
-            val itemFocusRequester = if (isSelected || index == 0) firstItemFocusRequester else null
+            val itemFocusRequester = if (isSelected) firstItemFocusRequester else null
             TvCategoryRailItem(
                 title = category.title,
                 isSelected = isSelected,
@@ -540,95 +575,966 @@ private fun TvPremiumSettingsPane() {
 // ==========================================
 // PANE 2: PROFILES (Authentic SettingsView+Profiles.swift)
 // ==========================================
+enum class PinDialogMode {
+    SET, CHANGE, REMOVE, UNLOCK_GATE, UNLOCK_SWITCH
+}
+
 @Composable
-private fun TvProfilesSettingsPane() {
+private fun TvProfilesSettingsPane(
+    targetFocusProfileId: String? = null,
+    onFocusConsumed: () -> Unit = {},
+    onOpenEditProfile: (UserProfileEntity?) -> Unit
+) {
+    val db = remember { LumeApp.instance.database }
     val settings = remember { AppSettings.get() }
-    var activeProfileName by remember { mutableStateOf(settings.activeProfileName) }
+    val scope = rememberCoroutineScope()
+
+    val profiles by db.profileDao().getAllProfiles().collectAsState(initial = emptyList())
+    val activeProfile by db.profileDao().observeActiveProfile().collectAsState(initial = null)
+
     var askOnStartup by remember { mutableStateOf(settings.askProfileOnStartup) }
     var parentalEnabled by remember { mutableStateOf(settings.parentalControlsEnabled) }
-    var pinValue by remember { mutableStateOf(settings.parentalPin) }
-    var showPinDialog by remember { mutableStateOf(false) }
+    var pinDialogMode by remember { mutableStateOf<PinDialogMode?>(null) }
+    var targetSwitchProfile by remember { mutableStateOf<UserProfileEntity?>(null) }
+    var isParentalUnlocked by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(36.dp)
-    ) {
-        // Section: Profiles List
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvSettingsSectionLabel("Profiles")
+    val profileFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+    val addProfileFocusRequester = remember { FocusRequester() }
 
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                TvSettingsRow(
-                    title = activeProfileName,
-                    value = "Active",
-                    trailingCheckmark = true,
-                    onClick = { /* switch */ }
-                )
-                TvSettingsRow(
-                    title = "Add Profile",
-                    showsPremiumBadge = !settings.isPremium,
-                    onClick = { /* add profile */ }
-                )
-            }
-
-            TvSettingsFooter("Each profile keeps its own watch history, progress and favorites, synced across your devices.")
-        }
-
-        // Section: Startup
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvSettingsSectionLabel("Startup")
-
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                TvOptionToggleRow(
-                    title = "Ask on Startup",
-                    isOn = askOnStartup,
-                    onToggle = {
-                        askOnStartup = it
-                        settings.askProfileOnStartup = it
-                    }
-                )
-            }
-
-            TvSettingsFooter("Choose a profile each time Lume launches. When off, Lume resumes the last profile you used.")
-        }
-
-        // Section: Parental Controls
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvSettingsSectionLabel("Parental Controls")
-
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                if (parentalEnabled) {
-                    TvSettingsRow(
-                        title = "Change PIN",
-                        value = "••••",
-                        onClick = { showPinDialog = true }
-                    )
-                    TvSettingsRow(
-                        title = "Turn Off PIN",
-                        isDestructive = true,
-                        onClick = {
-                            parentalEnabled = false
-                            settings.parentalControlsEnabled = false
-                        }
-                    )
+    LaunchedEffect(targetFocusProfileId, profiles) {
+        val targetId = targetFocusProfileId ?: return@LaunchedEffect
+        delay(40)
+        try {
+            if (targetId == "add_profile") {
+                addProfileFocusRequester.requestFocus()
+                onFocusConsumed()
+            } else if (profiles.any { it.id == targetId }) {
+                profileFocusRequesters[targetId]?.requestFocus()
+                onFocusConsumed()
+            } else {
+                delay(80)
+                if (profiles.any { it.id == targetId }) {
+                    profileFocusRequesters[targetId]?.requestFocus()
                 } else {
-                    TvSettingsRow(
-                        title = "Set a PIN",
-                        onClick = {
-                            parentalEnabled = true
-                            settings.parentalControlsEnabled = true
-                            showPinDialog = true
+                    addProfileFocusRequester.requestFocus()
+                }
+                onFocusConsumed()
+            }
+        } catch (_: Exception) {}
+    }
+
+    // Seed default profile if empty
+    LaunchedEffect(profiles) {
+        if (profiles.isEmpty()) {
+            withContext(Dispatchers.IO) {
+                if (db.profileDao().getProfileCount() == 0) {
+                    val defaultProfile = UserProfileEntity(
+                        id = "default",
+                        name = "Default",
+                        avatarColor = 0xFF0A84FF.toInt(),
+                        isChild = false,
+                        isCurrent = true
+                    )
+                    db.profileDao().insertProfile(defaultProfile)
+                    settings.activeProfileId = "default"
+                    settings.activeProfileName = "Default"
+                    settings.activeProfileIsChild = false
+                }
+            }
+        }
+    }
+
+    val currentActiveId = activeProfile?.id ?: settings.activeProfileId
+    val currentIsChild = activeProfile?.isChild ?: settings.activeProfileIsChild
+    val requiresParentalGate = parentalEnabled && currentIsChild && !isParentalUnlocked
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (requiresParentalGate) {
+            // Parental Gate View matching Apple TV ParentalGateView
+            TvParentalGateView(
+                subtitle = "Enter your PIN to manage profiles.",
+                onUnlock = { isParentalUnlocked = true }
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(36.dp)
+            ) {
+                // Section: Profiles List
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TvSettingsSectionLabel("Profiles")
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        profiles.forEach { profile ->
+                            val isActive = profile.id == currentActiveId
+                            val rowFocusRequester = profileFocusRequesters.getOrPut(profile.id) { FocusRequester() }
+                            TvProfileSwitchRow(
+                                profile = profile,
+                                isActive = isActive,
+                                focusRequester = rowFocusRequester,
+                                onSwitch = {
+                                    if (!isActive) {
+                                        if (currentIsChild && parentalEnabled) {
+                                            targetSwitchProfile = profile
+                                            pinDialogMode = PinDialogMode.UNLOCK_SWITCH
+                                        } else {
+                                            scope.launch(Dispatchers.IO) {
+                                                db.profileDao().setActiveProfile(profile.id)
+                                                settings.activeProfileId = profile.id
+                                                settings.activeProfileName = profile.name
+                                                settings.activeProfileIsChild = profile.isChild
+                                            }
+                                        }
+                                    }
+                                },
+                                onEdit = {
+                                    onOpenEditProfile(profile)
+                                }
+                            )
                         }
+
+                        // Add Profile Row
+                        TvSettingsRow(
+                            title = "Add Profile",
+                            leadingIcon = Icons.Default.Add,
+                            focusRequester = addProfileFocusRequester,
+                            showsPremiumBadge = !settings.isPremium && profiles.isNotEmpty(),
+                            onClick = {
+                                onOpenEditProfile(null)
+                            }
+                        )
+                    }
+
+                    TvSettingsFooter("Each profile keeps its own watch history, progress and favorites, synced across your devices.")
+                }
+
+                // Section: Startup
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TvSettingsSectionLabel("Startup")
+
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        TvOptionToggleRow(
+                            title = "Ask on Startup",
+                            isOn = askOnStartup,
+                            onToggle = {
+                                askOnStartup = it
+                                settings.askProfileOnStartup = it
+                            }
+                        )
+                    }
+
+                    TvSettingsFooter("Choose a profile each time Lume launches. When off, Lume resumes the last profile you used.")
+                }
+
+                // Section: Parental Controls
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TvSettingsSectionLabel("Parental Controls")
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (parentalEnabled) {
+                            TvSettingsRow(
+                                title = "Change PIN",
+                                leadingIcon = Icons.Default.LockReset,
+                                value = "••••",
+                                onClick = { pinDialogMode = PinDialogMode.CHANGE }
+                            )
+                            TvSettingsRow(
+                                title = "Turn Off PIN",
+                                leadingIcon = Icons.Default.LockOpen,
+                                isDestructive = true,
+                                onClick = { pinDialogMode = PinDialogMode.REMOVE }
+                            )
+                        } else {
+                            TvSettingsRow(
+                                title = "Set a PIN",
+                                leadingIcon = Icons.Default.Lock,
+                                onClick = { pinDialogMode = PinDialogMode.SET }
+                            )
+                        }
+                    }
+
+                    TvSettingsFooter("A PIN is required to switch away from a child profile and to open Content Management.")
+                }
+            }
+        }
+
+        // Active PIN dialog overlay if requested
+        pinDialogMode?.let { mode ->
+            TvParentalPinDialog(
+                mode = mode,
+                targetProfile = targetSwitchProfile,
+                onDismiss = {
+                    pinDialogMode = null
+                    targetSwitchProfile = null
+                },
+                onSuccess = { target ->
+                    val finishedMode = pinDialogMode
+                    pinDialogMode = null
+                    parentalEnabled = settings.parentalControlsEnabled
+                    if (finishedMode == PinDialogMode.UNLOCK_SWITCH && target != null) {
+                        scope.launch(Dispatchers.IO) {
+                            db.profileDao().setActiveProfile(target.id)
+                            settings.activeProfileId = target.id
+                            settings.activeProfileName = target.name
+                            settings.activeProfileIsChild = target.isChild
+                        }
+                    }
+                    targetSwitchProfile = null
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun TvProfileSwitchRow(
+    profile: UserProfileEntity,
+    isActive: Boolean,
+    focusRequester: FocusRequester? = null,
+    onSwitch: () -> Unit,
+    onEdit: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(modifier = Modifier.weight(1f)) {
+            TvSettingsRow(
+                title = profile.name,
+                focusRequester = focusRequester,
+                value = if (profile.isChild) "Child" else if (isActive) "Active" else null,
+                leadingContent = {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(profile.avatarColor)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                },
+                trailingCheckmark = isActive,
+                onClick = onSwitch
+            )
+        }
+
+        TvSettingsIconButton(
+            icon = Icons.Default.Edit,
+            contentDescription = "Edit ${profile.name}",
+            onClick = onEdit
+        )
+    }
+}
+
+@Composable
+private fun TvProfileEditorPane(
+    profile: UserProfileEntity?,
+    onBack: () -> Unit,
+    onProfileSaved: (savedProfileId: String) -> Unit,
+    onProfileDeleted: () -> Unit
+) {
+    val db = remember { LumeApp.instance.database }
+    val settings = remember { AppSettings.get() }
+    val scope = rememberCoroutineScope()
+
+    var name by remember { mutableStateOf(profile?.name ?: "") }
+    var selectedColor by remember { mutableStateOf(profile?.avatarColor ?: 0xFF0A84FF.toInt()) }
+    var isChild by remember { mutableStateOf(profile?.isChild ?: false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var profileCount by remember { mutableStateOf(1) }
+
+    val isEditing = profile != null
+    val canDelete = isEditing && profileCount > 1
+    val nameFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        try {
+            nameFocusRequester.requestFocus()
+        } catch (_: Exception) {}
+        delay(40)
+        try {
+            nameFocusRequester.requestFocus()
+        } catch (_: Exception) {}
+        delay(100)
+        try {
+            nameFocusRequester.requestFocus()
+        } catch (_: Exception) {}
+        withContext(Dispatchers.IO) {
+            profileCount = db.profileDao().getProfileCount()
+        }
+    }
+
+    val profileColors = remember {
+        listOf(
+            0xFF0A84FF.toInt() to "Blue",
+            0xFFBF5AF2.toInt() to "Purple",
+            0xFFFF375F.toInt() to "Pink",
+            0xFFFF453A.toInt() to "Red",
+            0xFFFF9F0A.toInt() to "Orange",
+            0xFFFFD60A.toInt() to "Yellow",
+            0xFF30D158.toInt() to "Green",
+            0xFF64D2FF.toInt() to "Teal",
+            0xFF5E5CE6.toInt() to "Indigo",
+            0xFFAC8E68.toInt() to "Brown"
+        )
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(32.dp)
+        ) {
+            TvDrillInHeader(
+                backLabel = "Profiles",
+                title = if (isEditing) "Edit Profile" else "New Profile",
+                onBack = onBack
+            )
+
+            // Avatar Preview Card
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = TVSettingsMetrics.rowHPadding),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(CircleShape)
+                        .background(Color(selectedColor)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(38.dp)
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = if (name.isBlank()) "Profile Preview" else name,
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (isChild) "Child Profile" else "Standard Profile",
+                        color = Color.White.copy(alpha = 0.55f),
+                        fontSize = 14.sp
                     )
                 }
             }
 
-            TvSettingsFooter("A PIN is required to switch away from a child profile and to open Content Management.")
+            // Section: Details
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TvSettingsSectionLabel("Details")
+                TvSettingsTextInput(
+                    label = "Name",
+                    value = name,
+                    placeholder = "Profile Name",
+                    focusRequester = nameFocusRequester,
+                    onValueChange = { name = it }
+                )
+            }
+
+            // Section: Avatar Color
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                TvSettingsSectionLabel("Avatar Color")
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = TVSettingsMetrics.rowHPadding),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    profileColors.forEach { (colorInt, label) ->
+                        val isSelected = selectedColor == colorInt
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val isFocused by interactionSource.collectIsFocusedAsState()
+
+                        Box(
+                            modifier = Modifier
+                                .size(if (isFocused) 46.dp else 40.dp)
+                                .clip(CircleShape)
+                                .background(Color(colorInt))
+                                .border(
+                                    width = if (isFocused) 3.dp else if (isSelected) 2.dp else 0.dp,
+                                    color = if (isFocused || isSelected) Color.White else Color.Transparent,
+                                    shape = CircleShape
+                                )
+                                .clickable(
+                                    interactionSource = interactionSource,
+                                    indication = null,
+                                    onClick = { selectedColor = colorInt }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = label,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Section: Restrictions
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TvSettingsSectionLabel("Restrictions")
+                TvOptionToggleRow(
+                    title = "Child Profile",
+                    isOn = isChild,
+                    onToggle = { isChild = it }
+                )
+                TvSettingsFooter("Child profiles hide restricted categories from browsing and search. A parental-control PIN, if set, is required to switch away from a child profile.")
+            }
+
+            // Section: Actions
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(horizontal = TVSettingsMetrics.rowHPadding, vertical = 8.dp)
+            ) {
+                TvSettingsActionButton(
+                    title = "Save Profile",
+                    prominent = true,
+                    onClick = {
+                        val trimmed = name.trim()
+                        if (trimmed.isEmpty()) return@TvSettingsActionButton
+
+                        scope.launch(Dispatchers.IO) {
+                            val savedId = if (profile != null) {
+                                val updated = profile.copy(
+                                    name = trimmed,
+                                    avatarColor = selectedColor,
+                                    isChild = isChild
+                                )
+                                db.profileDao().updateProfile(updated)
+                                if (updated.isCurrent) {
+                                    settings.activeProfileName = updated.name
+                                    settings.activeProfileIsChild = updated.isChild
+                                }
+                                updated.id
+                            } else {
+                                val newId = UUID.randomUUID().toString()
+                                val newProfile = UserProfileEntity(
+                                    id = newId,
+                                    name = trimmed,
+                                    avatarColor = selectedColor,
+                                    isChild = isChild,
+                                    isCurrent = false
+                                )
+                                db.profileDao().insertProfile(newProfile)
+                                newId
+                            }
+                            withContext(Dispatchers.Main) {
+                                onProfileSaved(savedId)
+                            }
+                        }
+                    }
+                )
+
+                if (canDelete) {
+                    TvSettingsActionButton(
+                        title = "Delete Profile",
+                        isDestructive = true,
+                        onClick = { showDeleteConfirm = true }
+                    )
+                }
+            }
+        }
+
+        // Delete Confirmation Dialog
+        if (showDeleteConfirm && profile != null) {
+            TvDeleteConfirmationDialog(
+                title = "Delete Profile?",
+                message = "This permanently removes this profile's watch history, progress and favorites. Your library is not affected.",
+                onConfirm = {
+                    showDeleteConfirm = false
+                    scope.launch(Dispatchers.IO) {
+                        if (profile.isCurrent) {
+                            val remaining = db.profileDao().getProfilesList().filter { it.id != profile.id }
+                            if (remaining.isNotEmpty()) {
+                                val nextActive = remaining.first()
+                                db.profileDao().setActiveProfile(nextActive.id)
+                                settings.activeProfileId = nextActive.id
+                                settings.activeProfileName = nextActive.name
+                                settings.activeProfileIsChild = nextActive.isChild
+                            }
+                        }
+                        db.profileDao().deleteProfile(profile)
+                        db.watchProgressDao().clearAllProgressForProfile(profile.id)
+                        withContext(Dispatchers.Main) {
+                            onProfileDeleted()
+                        }
+                    }
+                },
+                onDismiss = { showDeleteConfirm = false }
+            )
         }
     }
 }
+
+@Composable
+private fun TvParentalGateView(
+    subtitle: String,
+    onUnlock: () -> Unit
+) {
+    val settings = remember { AppSettings.get() }
+    var enteredPin by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(44.dp)
+        )
+        Text(
+            text = "Parental Controls",
+            color = Color.White,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = subtitle,
+            color = Color.White.copy(alpha = 0.65f),
+            fontSize = 16.sp
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            for (i in 0 until 4) {
+                val isFilled = i < enteredPin.length
+                Box(
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(if (isFilled) Color.White else Color.White.copy(alpha = 0.2f))
+                        .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape)
+                )
+            }
+        }
+
+        if (errorMessage != null) {
+            Text(
+                text = errorMessage!!,
+                color = Color(0xFFFF5252),
+                fontSize = 14.sp
+            )
+        }
+
+        TvNumericKeypad(
+            onDigitClick = { digit ->
+                if (enteredPin.length < 4) {
+                    val next = enteredPin + digit
+                    enteredPin = next
+                    if (next.length == 4) {
+                        if (next == settings.parentalPin) {
+                            onUnlock()
+                        } else {
+                            errorMessage = "Incorrect PIN. Try again."
+                            enteredPin = ""
+                        }
+                    }
+                }
+            },
+            onClear = {
+                enteredPin = ""
+                errorMessage = null
+            },
+            onBackspace = {
+                if (enteredPin.isNotEmpty()) {
+                    enteredPin = enteredPin.dropLast(1)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun TvParentalPinDialog(
+    mode: PinDialogMode,
+    targetProfile: UserProfileEntity? = null,
+    onDismiss: () -> Unit,
+    onSuccess: (target: UserProfileEntity?) -> Unit
+) {
+    val settings = remember { AppSettings.get() }
+    var step by remember { mutableStateOf(1) }
+    var enteredPin by remember { mutableStateOf("") }
+    var tempNewPin by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val title = when (mode) {
+        PinDialogMode.SET -> if (step == 1) "Set a PIN" else "Confirm PIN"
+        PinDialogMode.CHANGE -> when (step) {
+            1 -> "Current PIN"
+            2 -> "New PIN"
+            else -> "Confirm New PIN"
+        }
+        PinDialogMode.REMOVE -> "Turn Off PIN"
+        PinDialogMode.UNLOCK_GATE -> "Parental Controls"
+        PinDialogMode.UNLOCK_SWITCH -> "Enter PIN"
+    }
+
+    val subtitle = when (mode) {
+        PinDialogMode.SET -> if (step == 1) "Enter a 4-digit parental control PIN." else "Re-enter your PIN to confirm."
+        PinDialogMode.CHANGE -> when (step) {
+            1 -> "Enter your current PIN."
+            2 -> "Enter your new 4-digit PIN."
+            else -> "Re-enter your new PIN to confirm."
+        }
+        PinDialogMode.REMOVE -> "Enter your current PIN to turn off parental controls."
+        PinDialogMode.UNLOCK_GATE -> "Enter your PIN to manage profiles."
+        PinDialogMode.UNLOCK_SWITCH -> "Enter your PIN to switch away from a child profile."
+    }
+
+    fun handlePinComplete(pin: String) {
+        when (mode) {
+            PinDialogMode.SET -> {
+                if (step == 1) {
+                    tempNewPin = pin
+                    enteredPin = ""
+                    errorMessage = null
+                    step = 2
+                } else {
+                    if (pin == tempNewPin) {
+                        settings.parentalPin = pin
+                        settings.parentalControlsEnabled = true
+                        onSuccess(null)
+                    } else {
+                        errorMessage = "PINs do not match. Try again."
+                        enteredPin = ""
+                        step = 1
+                    }
+                }
+            }
+            PinDialogMode.CHANGE -> {
+                when (step) {
+                    1 -> {
+                        if (pin == settings.parentalPin) {
+                            enteredPin = ""
+                            errorMessage = null
+                            step = 2
+                        } else {
+                            errorMessage = "Incorrect PIN. Try again."
+                            enteredPin = ""
+                        }
+                    }
+                    2 -> {
+                        tempNewPin = pin
+                        enteredPin = ""
+                        errorMessage = null
+                        step = 3
+                    }
+                    3 -> {
+                        if (pin == tempNewPin) {
+                            settings.parentalPin = pin
+                            onSuccess(null)
+                        } else {
+                            errorMessage = "PINs do not match. Try again."
+                            enteredPin = ""
+                            step = 2
+                        }
+                    }
+                }
+            }
+            PinDialogMode.REMOVE -> {
+                if (pin == settings.parentalPin) {
+                    settings.parentalControlsEnabled = false
+                    onSuccess(null)
+                } else {
+                    errorMessage = "Incorrect PIN. Try again."
+                    enteredPin = ""
+                }
+            }
+            PinDialogMode.UNLOCK_GATE, PinDialogMode.UNLOCK_SWITCH -> {
+                if (pin == settings.parentalPin) {
+                    onSuccess(targetProfile)
+                } else {
+                    errorMessage = "Incorrect PIN. Try again."
+                    enteredPin = ""
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.88f))
+            .onKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown) {
+                    val digit = when (event.key) {
+                        Key.Zero, Key.NumPad0 -> "0"
+                        Key.One, Key.NumPad1 -> "1"
+                        Key.Two, Key.NumPad2 -> "2"
+                        Key.Three, Key.NumPad3 -> "3"
+                        Key.Four, Key.NumPad4 -> "4"
+                        Key.Five, Key.NumPad5 -> "5"
+                        Key.Six, Key.NumPad6 -> "6"
+                        Key.Seven, Key.NumPad7 -> "7"
+                        Key.Eight, Key.NumPad8 -> "8"
+                        Key.Nine, Key.NumPad9 -> "9"
+                        Key.Backspace -> {
+                            if (enteredPin.isNotEmpty()) enteredPin = enteredPin.dropLast(1)
+                            return@onKeyEvent true
+                        }
+                        Key.Escape, Key.Back -> {
+                            onDismiss()
+                            return@onKeyEvent true
+                        }
+                        else -> null
+                    }
+                    if (digit != null && enteredPin.length < 4) {
+                        val next = enteredPin + digit
+                        enteredPin = next
+                        if (next.length == 4) {
+                            handlePinComplete(next)
+                        }
+                        return@onKeyEvent true
+                    }
+                }
+                false
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .width(420.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xFF1E1E24))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
+                .padding(28.dp)
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = subtitle,
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                // 4 PIN Dots
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    for (i in 0 until 4) {
+                        val isFilled = i < enteredPin.length
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(if (isFilled) Color.White else Color.White.copy(alpha = 0.2f))
+                                .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape)
+                        )
+                    }
+                }
+
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage!!,
+                        color = Color(0xFFFF5252),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                // Numeric Keypad
+                TvNumericKeypad(
+                    onDigitClick = { digit ->
+                        if (enteredPin.length < 4) {
+                            val next = enteredPin + digit
+                            enteredPin = next
+                            if (next.length == 4) {
+                                handlePinComplete(next)
+                            }
+                        }
+                    },
+                    onClear = {
+                        enteredPin = ""
+                        errorMessage = null
+                    },
+                    onBackspace = {
+                        if (enteredPin.isNotEmpty()) {
+                            enteredPin = enteredPin.dropLast(1)
+                        }
+                    }
+                )
+
+                TvSettingsActionButton(
+                    title = "Cancel",
+                    onClick = onDismiss
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvNumericKeypad(
+    onDigitClick: (String) -> Unit,
+    onClear: () -> Unit,
+    onBackspace: () -> Unit
+) {
+    val rows = listOf(
+        listOf("1", "2", "3"),
+        listOf("4", "5", "6"),
+        listOf("7", "8", "9"),
+        listOf("C", "0", "⌫")
+    )
+
+    Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        rows.forEach { rowKeys ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                rowKeys.forEach { key ->
+                    TvKeypadButton(
+                        text = key,
+                        onClick = {
+                            when (key) {
+                                "C" -> onClear()
+                                "⌫" -> onBackspace()
+                                else -> onDigitClick(key)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvKeypadButton(
+    text: String,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .width(76.dp)
+            .height(48.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isFocused) Color.White else Color.White.copy(alpha = 0.08f))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = if (isFocused) Color.Black else Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+private fun TvDeleteConfirmationDialog(
+    title: String,
+    message: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .width(440.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xFF1E1E24))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(20.dp))
+                .padding(28.dp)
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = title,
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = message,
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 20.sp
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    TvSettingsActionButton(
+                        title = "Cancel",
+                        onClick = onDismiss
+                    )
+                    TvSettingsActionButton(
+                        title = "Delete",
+                        isDestructive = true,
+                        onClick = onConfirm
+                    )
+                }
+            }
+        }
+    }
+}
+
 
 // ==========================================
 // PANE 3: PLAYLISTS (Authentic SettingsView+Playlists.swift)
@@ -642,8 +1548,9 @@ private fun TvPlaylistsSettingsPane(
     val playlists by database.playlistDao().getAllPlaylists().collectAsState(initial = emptyList())
     val settings = remember { AppSettings.get() }
     val scope = rememberCoroutineScope()
-    var syncIntervalIndex by remember { mutableStateOf(2) } // default: Every 3 Days
-    val syncIntervals = listOf("Every 6 Hours", "Every Day", "Every 3 Days", "Every Week")
+    var selectedFrequency by remember { mutableStateOf(settings.playlistSyncFrequency) }
+    val isSyncing by PlaylistSyncManager.isSyncing.collectAsState()
+    val syncProgressMessage by PlaylistSyncManager.syncProgressMessage.collectAsState()
 
     Column(
         modifier = Modifier
@@ -711,16 +1618,25 @@ private fun TvPlaylistsSettingsPane(
             TvSettingsSectionLabel("Automatic Sync")
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                syncIntervals.forEachIndexed { index, label ->
+                PlaylistSyncFrequency.values().forEach { freq ->
                     TvSettingsRow(
-                        title = label,
-                        trailingCheckmark = syncIntervalIndex == index,
-                        onClick = { syncIntervalIndex = index }
+                        title = freq.title,
+                        trailingCheckmark = selectedFrequency == freq,
+                        onClick = {
+                            selectedFrequency = freq
+                            settings.playlistSyncFrequency = freq
+                        }
                     )
                 }
                 TvSettingsRow(
-                    title = "Sync All Playlists Now",
-                    onClick = { /* trigger sync */ }
+                    title = if (isSyncing) "Syncing Playlists… ${syncProgressMessage?.let { "($it)" } ?: ""}" else "Sync All Playlists Now",
+                    onClick = {
+                        if (!isSyncing) {
+                            scope.launch(Dispatchers.IO) {
+                                PlaylistSyncManager.syncAllPlaylists()
+                            }
+                        }
+                    }
                 )
             }
 
@@ -739,14 +1655,21 @@ private fun TvPlaylistDetailPane(
 ) {
     val database = remember { LumeApp.instance.database }
     val scope = rememberCoroutineScope()
+    val livePlaylist by database.playlistDao().observePlaylistById(playlist.id).collectAsState(initial = playlist)
+    val currentPlaylist = livePlaylist ?: playlist
+
     var isEditing by remember { mutableStateOf(false) }
-    var editName by remember { mutableStateOf(playlist.name) }
-    var editUrl by remember { mutableStateOf(playlist.serverUrl) }
-    var editUsername by remember { mutableStateOf(playlist.username) }
-    var editPassword by remember { mutableStateOf(playlist.password) }
+    var editName by remember { mutableStateOf(currentPlaylist.name) }
+    var editUrl by remember { mutableStateOf(currentPlaylist.serverUrl) }
+    var editUsername by remember { mutableStateOf(currentPlaylist.username) }
+    var editPassword by remember { mutableStateOf(currentPlaylist.password) }
     var streamFormatIndex by remember { mutableStateOf(0) }
     val streamFormats = listOf("HLS (.m3u8)", "MPEG-TS (.ts)")
-    var syncEnabled by remember { mutableStateOf(true) }
+
+    val isSyncing by PlaylistSyncManager.isSyncing.collectAsState()
+    val syncingPlaylistId by PlaylistSyncManager.syncingPlaylistId.collectAsState()
+    val syncProgressMessage by PlaylistSyncManager.syncProgressMessage.collectAsState()
+    val isThisPlaylistSyncing = isSyncing && syncingPlaylistId == currentPlaylist.id
 
     Column(
         modifier = Modifier
@@ -754,7 +1677,7 @@ private fun TvPlaylistDetailPane(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(36.dp)
     ) {
-        TvDrillInHeader(backLabel = "Playlists", title = playlist.name, onBack = onBack)
+        TvDrillInHeader(backLabel = "Playlists", title = currentPlaylist.name, onBack = onBack)
 
         // Details Section
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -769,16 +1692,16 @@ private fun TvPlaylistDetailPane(
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    TvSettingsValueRow("Name", playlist.name)
-                    TvSettingsValueRow("Server URL", playlist.serverUrl)
-                    if (!playlist.epgUrl.isNullOrEmpty()) {
-                        TvSettingsValueRow("EPG URL", playlist.epgUrl!!)
+                    TvSettingsValueRow("Name", currentPlaylist.name)
+                    TvSettingsValueRow("Server URL", currentPlaylist.serverUrl)
+                    if (!currentPlaylist.epgUrl.isNullOrEmpty()) {
+                        TvSettingsValueRow("EPG URL", currentPlaylist.epgUrl!!)
                     }
-                    if (playlist.username.isNotEmpty()) {
-                        TvSettingsValueRow("Username", playlist.username)
+                    if (currentPlaylist.username.isNotEmpty()) {
+                        TvSettingsValueRow("Username", currentPlaylist.username)
                         TvSettingsValueRow("Password", "••••••••")
                     }
-                    TvSettingsValueRow("Type", playlist.type)
+                    TvSettingsValueRow("Type", currentPlaylist.type)
                 }
             }
         }
@@ -817,12 +1740,32 @@ private fun TvPlaylistDetailPane(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 TvOptionToggleRow(
                     title = "Sync Enabled",
-                    isOn = syncEnabled,
-                    onToggle = { syncEnabled = it }
+                    isOn = currentPlaylist.syncEnabled,
+                    onToggle = { isEnabled ->
+                        scope.launch(Dispatchers.IO) {
+                            database.playlistDao().updateSyncEnabled(currentPlaylist.id, isEnabled)
+                        }
+                    }
                 )
-                TvSettingsValueRow("Status", "Up to date", valueColor = Color(0xFF4CAF50))
-                TvSettingsValueRow("Last Synced", "15 minutes ago")
-                TvSettingsRow(title = "Sync Now", onClick = { /* sync */ })
+                TvSettingsValueRow(
+                    "Status",
+                    if (isThisPlaylistSyncing) "Syncing…" else if (currentPlaylist.syncEnabled) "Active" else "Disabled",
+                    valueColor = if (currentPlaylist.syncEnabled) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.55f)
+                )
+                TvSettingsValueRow(
+                    "Last Synced",
+                    PlaylistSyncManager.formatLastSync(currentPlaylist.lastSyncDate)
+                )
+                TvSettingsRow(
+                    title = if (isThisPlaylistSyncing) "Syncing… ${syncProgressMessage?.let { "($it)" } ?: ""}" else "Sync Now",
+                    onClick = {
+                        if (!isSyncing) {
+                            scope.launch(Dispatchers.IO) {
+                                PlaylistSyncManager.syncPlaylist(currentPlaylist)
+                            }
+                        }
+                    }
+                )
             }
         }
 
@@ -3527,10 +4470,13 @@ private fun TvMiniIconButton(
 fun TvSettingsRow(
     title: String,
     value: String? = null,
+    leadingIcon: ImageVector? = null,
+    leadingContent: (@Composable () -> Unit)? = null,
     trailingChevron: Boolean = false,
     trailingCheckmark: Boolean = false,
     showsPremiumBadge: Boolean = false,
     isDestructive: Boolean = false,
+    focusRequester: FocusRequester? = null,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -3555,9 +4501,12 @@ fun TvSettingsRow(
         else -> Color.White.copy(alpha = 0.55f)
     }
 
+    val focusModifier = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .then(focusModifier)
             .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
             .then(bgModifier)
             .clickable(
@@ -3575,9 +4524,20 @@ fun TvSettingsRow(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.weight(1f, fill = false)
             ) {
+                if (leadingContent != null) {
+                    leadingContent()
+                } else if (leadingIcon != null) {
+                    Icon(
+                        imageVector = leadingIcon,
+                        contentDescription = null,
+                        tint = foregroundColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
                 Text(
                     text = title,
                     color = foregroundColor,
@@ -3714,18 +4674,26 @@ fun TvSettingsActionButton(
     title: String,
     icon: ImageVector? = null,
     prominent: Boolean = false,
+    isDestructive: Boolean = false,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    val bgModifier = if (isFocused) {
-        Modifier.background(Color.White.copy(alpha = 0.95f))
-    } else {
-        Modifier.background(if (prominent) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.06f))
+    val bgModifier = when {
+        isFocused && isDestructive -> Modifier.background(Color(0xFFE53935))
+        isFocused -> Modifier.background(Color.White.copy(alpha = 0.95f))
+        isDestructive -> Modifier.background(Color(0xFFE53935).copy(alpha = 0.15f))
+        prominent -> Modifier.background(Color.White.copy(alpha = 0.16f))
+        else -> Modifier.background(Color.White.copy(alpha = 0.06f))
     }
 
-    val foregroundColor = if (isFocused) Color.Black else Color.White
+    val foregroundColor = when {
+        isFocused && isDestructive -> Color.White
+        isFocused -> Color.Black
+        isDestructive -> Color(0xFFFF5252)
+        else -> Color.White
+    }
 
     Box(
         modifier = Modifier
@@ -3760,6 +4728,36 @@ fun TvSettingsActionButton(
                 softWrap = false
             )
         }
+    }
+}
+
+@Composable
+fun TvSettingsIconButton(
+    icon: ImageVector,
+    contentDescription: String? = null,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
+            .background(if (isFocused) Color.White.copy(alpha = 0.95f) else Color.White.copy(alpha = 0.08f))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (isFocused) Color.Black else Color.White,
+            modifier = Modifier.size(20.dp)
+        )
     }
 }
 
@@ -3851,6 +4849,7 @@ fun TvSettingsTextInput(
     value: String,
     placeholder: String,
     isPassword: Boolean = false,
+    focusRequester: FocusRequester? = null,
     onValueChange: (String) -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -3872,7 +4871,7 @@ fun TvSettingsTextInput(
                 .fillMaxWidth()
                 .height(48.dp)
                 .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
-                .background(Color.White.copy(alpha = 0.08f))
+                .background(if (isFocused) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.08f))
                 .border(
                     width = if (isFocused) 2.dp else 1.dp,
                     color = if (isFocused) Color.White else Color.White.copy(alpha = 0.12f),
@@ -3887,9 +4886,14 @@ fun TvSettingsTextInput(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
+                singleLine = true,
                 textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
                 cursorBrush = SolidColor(Color.White),
-                modifier = Modifier.fillMaxWidth()
+                visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                    .onFocusChanged { isFocused = it.isFocused }
             )
         }
     }

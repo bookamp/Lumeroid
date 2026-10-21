@@ -33,6 +33,7 @@ import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.data.entities.WatchProgressEntity
 import org.getlume.android.core.designsystem.*
+import org.getlume.android.core.settings.AppSettings
 import org.getlume.android.core.player.*
 import java.util.Locale
 
@@ -59,7 +60,7 @@ fun TvPlayerScreen(
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                     val progress = WatchProgressEntity(
                         contentId = currentMedia.id,
-                        profileId = "default",
+                        profileId = AppSettings.get().activeProfileId,
                         title = currentMedia.title,
                         posterUrl = currentMedia.posterUrl,
                         contentType = "movie",

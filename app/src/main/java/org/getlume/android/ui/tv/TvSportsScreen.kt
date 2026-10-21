@@ -137,7 +137,7 @@ fun TvSportsScreen(
                         val isSelected = selectedLeague == code
                         val interaction = remember { MutableInteractionSource() }
                         val isFocused by interaction.collectIsFocusedAsState()
-                        val itemFocusRequester = if (isSelected || index == 0) {
+                        val itemFocusRequester = if (isSelected) {
                             firstItemFocusRequester
                         } else null
 
