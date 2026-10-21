@@ -16,6 +16,8 @@ data class PlaylistEntity(
     val password: String = "",
     val epgUrl: String = "",
     val isActive: Boolean = true,
+    val syncEnabled: Boolean = true,
+    val lastSyncDate: Long = 0L,
     val createdAt: Long = System.currentTimeMillis()
 )
 
