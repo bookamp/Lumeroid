@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -37,6 +38,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 
+import androidx.compose.ui.focus.focusProperties
+
 /**
  * Authentic Apple TV floating top pill navigation bar.
  * Exact 1:1 match to tvos-home.webp from original Lume.
@@ -45,6 +48,7 @@ import androidx.compose.ui.focus.onFocusChanged
 @Composable
 fun TvTopBar(
     currentScreen: Screen,
+    isTopBarFocused: Boolean = false,
     onSelectScreen: (Screen) -> Unit,
     onOpenSearch: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -52,6 +56,21 @@ fun TvTopBar(
     onFocusChanged: ((Boolean) -> Unit)? = null,
     focusRequester: FocusRequester = remember { FocusRequester() }
 ) {
+    val onBackFromTopBar: (() -> Boolean)? = if (currentScreen != Screen.Home) {
+        {
+            onSelectScreen(Screen.Home)
+            true
+        }
+    } else null
+
+    LaunchedEffect(isTopBarFocused) {
+        if (isTopBarFocused) {
+            try {
+                focusRequester.requestFocus()
+            } catch (_: Exception) {}
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -74,9 +93,12 @@ fun TvTopBar(
             TvTopBarIconItem(
                 icon = Icons.Default.Search,
                 contentDescription = "Search",
-                isSelected = false,
+                isSelected = currentScreen == Screen.Search,
+                focusRequester = if (currentScreen == Screen.Search) focusRequester else null,
+                canFocus = isTopBarFocused,
                 onClick = onOpenSearch,
-                onMoveDown = onMoveDown
+                onMoveDown = onMoveDown,
+                onBack = onBackFromTopBar
             )
 
             // Text Tabs
@@ -84,40 +106,50 @@ fun TvTopBar(
                 title = "Home",
                 isSelected = currentScreen == Screen.Home,
                 focusRequester = if (currentScreen == Screen.Home) focusRequester else null,
+                canFocus = isTopBarFocused,
                 onClick = { onSelectScreen(Screen.Home) },
-                onMoveDown = onMoveDown
+                onMoveDown = onMoveDown,
+                onBack = onBackFromTopBar
             )
 
             TvTopBarTextItem(
                 title = "Movies",
                 isSelected = currentScreen == Screen.Movies,
                 focusRequester = if (currentScreen == Screen.Movies) focusRequester else null,
+                canFocus = isTopBarFocused,
                 onClick = { onSelectScreen(Screen.Movies) },
-                onMoveDown = onMoveDown
+                onMoveDown = onMoveDown,
+                onBack = onBackFromTopBar
             )
 
             TvTopBarTextItem(
                 title = "Series",
                 isSelected = currentScreen == Screen.Series,
                 focusRequester = if (currentScreen == Screen.Series) focusRequester else null,
+                canFocus = isTopBarFocused,
                 onClick = { onSelectScreen(Screen.Series) },
-                onMoveDown = onMoveDown
+                onMoveDown = onMoveDown,
+                onBack = onBackFromTopBar
             )
 
             TvTopBarTextItem(
                 title = "Live TV",
                 isSelected = currentScreen == Screen.LiveTv,
                 focusRequester = if (currentScreen == Screen.LiveTv) focusRequester else null,
+                canFocus = isTopBarFocused,
                 onClick = { onSelectScreen(Screen.LiveTv) },
-                onMoveDown = onMoveDown
+                onMoveDown = onMoveDown,
+                onBack = onBackFromTopBar
             )
 
             TvTopBarTextItem(
                 title = "Sports",
                 isSelected = currentScreen == Screen.Sports,
                 focusRequester = if (currentScreen == Screen.Sports) focusRequester else null,
+                canFocus = isTopBarFocused,
                 onClick = { onSelectScreen(Screen.Sports) },
-                onMoveDown = onMoveDown
+                onMoveDown = onMoveDown,
+                onBack = onBackFromTopBar
             )
 
             // Settings Gear Icon Tab
@@ -126,8 +158,10 @@ fun TvTopBar(
                 contentDescription = "Settings",
                 isSelected = currentScreen == Screen.Settings,
                 focusRequester = if (currentScreen == Screen.Settings) focusRequester else null,
+                canFocus = isTopBarFocused,
                 onClick = onOpenSettings,
-                onMoveDown = onMoveDown
+                onMoveDown = onMoveDown,
+                onBack = onBackFromTopBar
             )
         }
     }
@@ -138,8 +172,10 @@ private fun TvTopBarTextItem(
     title: String,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
+    canFocus: Boolean = true,
     onClick: () -> Unit,
-    onMoveDown: (() -> Boolean)? = null
+    onMoveDown: (() -> Boolean)? = null,
+    onBack: (() -> Boolean)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -169,18 +205,30 @@ private fun TvTopBarTextItem(
 
     Box(
         modifier = Modifier
+            .focusProperties { this.canFocus = canFocus }
             .then(focusModifier)
             .scale(scale)
             .clip(RoundedCornerShape(20.dp))
             .background(backgroundColor)
             .onPreviewKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
-                    onMoveDown?.invoke() ?: false
-                } else {
-                    false
-                }
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    when (keyEvent.nativeKeyEvent.keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                        android.view.KeyEvent.KEYCODE_ENTER,
+                        android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                            onClick()
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            onMoveDown?.invoke() ?: false
+                        }
+                        android.view.KeyEvent.KEYCODE_BACK -> {
+                            onBack?.invoke() ?: false
+                        }
+                        else -> false
+                    }
+                } else false
             }
-            .focusable(interactionSource = interactionSource)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -204,8 +252,10 @@ private fun TvTopBarIconItem(
     contentDescription: String,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
+    canFocus: Boolean = true,
     onClick: () -> Unit,
-    onMoveDown: (() -> Boolean)? = null
+    onMoveDown: (() -> Boolean)? = null,
+    onBack: (() -> Boolean)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -235,19 +285,31 @@ private fun TvTopBarIconItem(
 
     Box(
         modifier = Modifier
+            .focusProperties { this.canFocus = canFocus }
             .then(focusModifier)
             .scale(scale)
             .size(36.dp)
             .clip(CircleShape)
             .background(backgroundColor)
             .onPreviewKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN) {
-                    onMoveDown?.invoke() ?: false
-                } else {
-                    false
-                }
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    when (keyEvent.nativeKeyEvent.keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                        android.view.KeyEvent.KEYCODE_ENTER,
+                        android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                            onClick()
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            onMoveDown?.invoke() ?: false
+                        }
+                        android.view.KeyEvent.KEYCODE_BACK -> {
+                            onBack?.invoke() ?: false
+                        }
+                        else -> false
+                    }
+                } else false
             }
-            .focusable(interactionSource = interactionSource)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
