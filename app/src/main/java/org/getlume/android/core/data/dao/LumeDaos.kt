@@ -15,14 +15,29 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlists WHERE isActive = 1 LIMIT 1")
     fun observeActivePlaylist(): Flow<PlaylistEntity?>
 
+    @Query("SELECT * FROM playlists WHERE id = :id LIMIT 1")
+    fun observePlaylistById(id: String): Flow<PlaylistEntity?>
+
+    @Query("SELECT * FROM playlists WHERE id = :id LIMIT 1")
+    suspend fun getPlaylistById(id: String): PlaylistEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlaylist(playlist: PlaylistEntity)
+
+    @Update
+    suspend fun updatePlaylist(playlist: PlaylistEntity)
 
     @Delete
     suspend fun deletePlaylist(playlist: PlaylistEntity)
 
     @Query("UPDATE playlists SET isActive = (id = :activeId)")
     suspend fun setActivePlaylist(activeId: String)
+
+    @Query("UPDATE playlists SET lastSyncDate = :lastSyncDate WHERE id = :id")
+    suspend fun updateLastSyncDate(id: String, lastSyncDate: Long)
+
+    @Query("UPDATE playlists SET syncEnabled = :syncEnabled WHERE id = :id")
+    suspend fun updateSyncEnabled(id: String, syncEnabled: Boolean)
 }
 
 @Dao
@@ -44,6 +59,9 @@ interface ChannelDao {
 
     @Query("SELECT * FROM channels WHERE name LIKE '%' || :query || '%' LIMIT 50")
     suspend fun searchChannels(query: String): List<ChannelEntity>
+
+    @Query("SELECT * FROM channels WHERE (playlistId = :playlistId OR :playlistId = '') AND name LIKE '%' || :query || '%' LIMIT 50")
+    suspend fun searchChannels(playlistId: String, query: String): List<ChannelEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChannels(channels: List<ChannelEntity>)
@@ -144,10 +162,10 @@ interface VodDao {
     @Query("SELECT COUNT(*) FROM series WHERE playlistId = :playlistId")
     suspend fun getSeriesCount(playlistId: String): Int
 
-    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND name LIKE '%' || :query || '%' LIMIT 50")
+    @Query("SELECT * FROM movies WHERE (playlistId = :playlistId OR :playlistId = '') AND name LIKE '%' || :query || '%' LIMIT 50")
     suspend fun searchMovies(playlistId: String, query: String): List<MovieEntity>
 
-    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND name LIKE '%' || :query || '%' LIMIT 50")
+    @Query("SELECT * FROM series WHERE (playlistId = :playlistId OR :playlistId = '') AND name LIKE '%' || :query || '%' LIMIT 50")
     suspend fun searchSeries(playlistId: String, query: String): List<SeriesEntity>
 }
 
@@ -164,6 +182,9 @@ interface WatchProgressDao {
 
     @Query("DELETE FROM watch_progress WHERE profileId = :profileId AND contentId = :contentId")
     suspend fun clearProgress(profileId: String, contentId: String)
+
+    @Query("DELETE FROM watch_progress WHERE profileId = :profileId")
+    suspend fun clearAllProgressForProfile(profileId: String)
 }
 
 @Dao
@@ -188,4 +209,37 @@ interface RecordingDao {
 
     @Delete
     suspend fun deleteRecording(recording: RecordingEntity)
+}
+
+@Dao
+interface ProfileDao {
+    @Query("SELECT * FROM user_profiles ORDER BY name ASC")
+    fun getAllProfiles(): Flow<List<UserProfileEntity>>
+
+    @Query("SELECT * FROM user_profiles ORDER BY name ASC")
+    suspend fun getProfilesList(): List<UserProfileEntity>
+
+    @Query("SELECT * FROM user_profiles WHERE isCurrent = 1 LIMIT 1")
+    fun observeActiveProfile(): Flow<UserProfileEntity?>
+
+    @Query("SELECT * FROM user_profiles WHERE isCurrent = 1 LIMIT 1")
+    suspend fun getActiveProfile(): UserProfileEntity?
+
+    @Query("SELECT * FROM user_profiles WHERE id = :id LIMIT 1")
+    suspend fun getProfileById(id: String): UserProfileEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertProfile(profile: UserProfileEntity)
+
+    @Update
+    suspend fun updateProfile(profile: UserProfileEntity)
+
+    @Delete
+    suspend fun deleteProfile(profile: UserProfileEntity)
+
+    @Query("UPDATE user_profiles SET isCurrent = (id = :activeId)")
+    suspend fun setActiveProfile(activeId: String)
+
+    @Query("SELECT COUNT(*) FROM user_profiles")
+    suspend fun getProfileCount(): Int
 }
