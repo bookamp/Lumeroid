@@ -5,8 +5,12 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.relocation.BringIntoViewResponder
+import androidx.compose.foundation.relocation.bringIntoViewResponder
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -88,6 +92,7 @@ fun TvHomeScreen(
     onOpenSeries: () -> Unit,
     onOpenSetup: () -> Unit,
     heroFocusRequester: FocusRequester = remember { FocusRequester() },
+    isTopBarFocused: Boolean = false,
     onMoveUpToTopBar: (() -> Unit)? = null
 ) {
     val db = LumeApp.instance.database
@@ -102,7 +107,9 @@ fun TvHomeScreen(
     val seriesList by db.vodDao().getSeries(playlistId, 40).collectAsState(initial = emptyList())
     val favoriteChannels by db.channelDao().getFavoriteChannels(playlistId).collectAsState(initial = emptyList())
     val favoriteMovies by db.vodDao().getFavoriteMovies(playlistId).collectAsState(initial = emptyList())
-    val continueWatching by db.watchProgressDao().getContinueWatching("default").collectAsState(initial = emptyList())
+    val activeProfile by db.profileDao().observeActiveProfile().collectAsState(initial = null)
+    val activeProfileId = activeProfile?.id ?: "default"
+    val continueWatching by db.watchProgressDao().getContinueWatching(activeProfileId).collectAsState(initial = emptyList())
 
     // Detail Modal Sheet State
     var selectedMovie by remember { mutableStateOf<MovieEntity?>(null) }
@@ -203,6 +210,26 @@ fun TvHomeScreen(
     } else null
 
     val scrollState = rememberScrollState()
+    val homeCoroutineScope = rememberCoroutineScope()
+
+    @OptIn(ExperimentalFoundationApi::class)
+    val noOpBringIntoView = remember {
+        object : BringIntoViewResponder {
+            @ExperimentalFoundationApi
+            override fun calculateRectForParent(localRect: Rect): Rect = Rect.Zero
+
+            @ExperimentalFoundationApi
+            override suspend fun bringChildIntoView(localRect: () -> Rect?) {}
+        }
+    }
+
+    // When anywhere on Home screen (Hero showcase or content rails), Back smoothly retracts up to Home tab in TopBar
+    BackHandler(enabled = !isTopBarFocused && selectedMovie == null && selectedSeries == null) {
+        homeCoroutineScope.launch {
+            scrollState.scrollTo(0)
+        }
+        onMoveUpToTopBar?.invoke()
+    }
     val cwRowFocusRequester = remember { FocusRequester() }
     val favRowFocusRequester = remember { FocusRequester() }
     val moviesRowFocusRequester = remember { FocusRequester() }
@@ -308,11 +335,13 @@ fun TvHomeScreen(
             ) {
                 // SHOWCASE HERO SECTION (Apple TV TVHeroShowcase)
                 if (currentHero != null) {
+                    @OptIn(ExperimentalFoundationApi::class)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(520.dp)
-                            .padding(start = 56.dp, end = 56.dp, bottom = 20.dp),
+                            .height(440.dp)
+                            .padding(top = 40.dp, start = 56.dp, end = 56.dp, bottom = 12.dp)
+                            .bringIntoViewResponder(noOpBringIntoView),
                         contentAlignment = Alignment.BottomStart
                     ) {
                         Column(
@@ -503,10 +532,7 @@ fun TvHomeScreen(
                     }
                 }
 
-                // If scrolled down into rails, Back button scrolls smoothly back to the top Hero (only when modals are closed)
-                BackHandler(enabled = scrollState.value > 0 && selectedMovie == null && selectedSeries == null) {
-                    scrollToHeroAndFocus()
-                }
+
 
                 Column(
                     modifier = Modifier
