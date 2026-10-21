@@ -13,7 +13,10 @@ import androidx.compose.ui.unit.sp
 import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.designsystem.*
 import org.getlume.android.core.player.PlayableMedia
+import org.getlume.android.core.sync.PlaylistSyncManager
 import org.getlume.android.ui.navigation.Screen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Authentic Apple TV main container for Lume on Android TV.
@@ -33,6 +36,14 @@ fun TvMainScreen(
     var showAddPlaylistModal by remember { mutableStateOf(false) }
     var isTopBarFocused by remember { mutableStateOf(false) }
 
+    // Authentic Apple TV Auto-Sync gate:
+    // On app startup, checks if the active playlist is due for an automatic refresh
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            PlaylistSyncManager.checkAndAutoSync()
+        }
+    }
+
     // Authentic Apple TV playback overlay:
     // When playing media, TvPlayerScreen is presented as an in-place full-screen overlay
     // over the tab container. The active tab, categories, selections, and detail sheets
@@ -47,6 +58,7 @@ fun TvMainScreen(
 
     // Bidirectional TopBar <-> Content focus requesters
     val topBarFocusRequester = remember { FocusRequester() }
+    val searchFirstFocusRequester = remember { FocusRequester() }
     val homeHeroFocusRequester = remember { FocusRequester() }
     val moviesFirstFocusRequester = remember { FocusRequester() }
     val seriesFirstFocusRequester = remember { FocusRequester() }
@@ -76,6 +88,16 @@ fun TvMainScreen(
         Box(modifier = Modifier.fillMaxSize()) {
             // Main Content Area based on selected tab
             when (selectedScreen) {
+                Screen.Search -> {
+                    TvSearchScreen(
+                        onPlayMedia = { media -> activePlaybackMedia = media },
+                        firstItemFocusRequester = searchFirstFocusRequester,
+                        onMoveUpToTopBar = {
+                            isTopBarFocused = true
+                            try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
+                        }
+                    )
+                }
                 Screen.Home -> {
                     TvHomeScreen(
                         onPlayMedia = { media -> activePlaybackMedia = media },
@@ -84,7 +106,9 @@ fun TvMainScreen(
                         onOpenSeries = { switchScreen(Screen.Series) },
                         onOpenSetup = { switchScreen(Screen.Settings) },
                         heroFocusRequester = homeHeroFocusRequester,
+                        isTopBarFocused = isTopBarFocused,
                         onMoveUpToTopBar = {
+                            isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
                         }
                     )
@@ -94,6 +118,7 @@ fun TvMainScreen(
                         onPlayMedia = { media -> activePlaybackMedia = media },
                         firstItemFocusRequester = moviesFirstFocusRequester,
                         onMoveUpToTopBar = {
+                            isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
                         }
                     )
@@ -103,6 +128,7 @@ fun TvMainScreen(
                         onPlayMedia = { media -> activePlaybackMedia = media },
                         firstItemFocusRequester = seriesFirstFocusRequester,
                         onMoveUpToTopBar = {
+                            isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
                         }
                     )
@@ -112,6 +138,7 @@ fun TvMainScreen(
                         onPlayMedia = { media -> activePlaybackMedia = media },
                         firstItemFocusRequester = liveTvFirstFocusRequester,
                         onMoveUpToTopBar = {
+                            isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
                         }
                     )
@@ -121,6 +148,7 @@ fun TvMainScreen(
                         onPlayMedia = { media -> activePlaybackMedia = media },
                         firstItemFocusRequester = sportsFirstFocusRequester,
                         onMoveUpToTopBar = {
+                            isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
                         }
                     )
@@ -148,6 +176,7 @@ fun TvMainScreen(
                             },
                             firstItemFocusRequester = settingsFirstFocusRequester,
                             onMoveUpToTopBar = {
+                                isTopBarFocused = true
                                 try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
                             }
                         )
@@ -164,20 +193,23 @@ fun TvMainScreen(
             if (!showAddPlaylistModal && activePlaybackMedia == null) {
                 TvTopBar(
                     currentScreen = selectedScreen,
+                    isTopBarFocused = isTopBarFocused,
                     focusRequester = topBarFocusRequester,
                     onFocusChanged = { isTopBarFocused = it },
                     onSelectScreen = { screen ->
                         switchScreen(screen)
                     },
                     onOpenSearch = {
-                        // Future search feature
+                        switchScreen(Screen.Search)
                     },
                     onOpenSettings = {
                         switchScreen(Screen.Settings)
                     },
                     onMoveDown = {
+                        isTopBarFocused = false
                         try {
                             when (selectedScreen) {
+                                Screen.Search -> searchFirstFocusRequester.requestFocus()
                                 Screen.Home -> homeHeroFocusRequester.requestFocus()
                                 Screen.Movies -> moviesFirstFocusRequester.requestFocus()
                                 Screen.Series -> seriesFirstFocusRequester.requestFocus()
