@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Lume</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_live_tv">Live TV</string>
+    <string name="nav_movies">Movies</string>
+    <string name="nav_series">Series</string>
+    <string name="nav_sports">Sports</string>
+    <string name="nav_multi_view">Multi-View</string>
+    <string name="nav_dvr">DVR</string>
+    <string name="nav_settings">Settings</string>
+</resources>
