@@ -1,0 +1,9 @@
+<resources>
+    <color name="lume_background">#0A0A0C</color>
+    <color name="lume_surface">#141418</color>
+    <color name="lume_surface_highlight">#202026</color>
+    <color name="lume_accent">#0A84FF</color>
+    <color name="lume_cyan">#30B0C7</color>
+    <color name="lume_text_primary">#FFFFFF</color>
+    <color name="lume_text_secondary">#8E8E93</color>
+</resources>
