@@ -19,6 +19,18 @@ enum class StreamInfoLevel(val title: String) {
     DETAILED("Detailed (Bitrate, Codec, FPS, Buffer)")
 }
 
+enum class PlaylistSyncFrequency(val title: String, val intervalMillis: Long) {
+    HOURS_6("Every 6 Hours", 6 * 3600 * 1000L),
+    DAILY("Every Day", 24 * 3600 * 1000L),
+    DAYS_3("Every 3 Days", 3 * 24 * 3600 * 1000L),
+    WEEKLY("Every Week", 7 * 24 * 3600 * 1000L);
+
+    fun isDue(lastSyncDate: Long, now: Long = System.currentTimeMillis()): Boolean {
+        if (lastSyncDate <= 0L) return true
+        return (now - lastSyncDate) >= intervalMillis
+    }
+}
+
 enum class SyncInterval(val title: String) {
     HOURS_6("Every 6 Hours"),
     HOURS_12("Every 12 Hours"),
@@ -170,6 +182,12 @@ class AppSettings private constructor(context: Context) {
         } catch (e: Exception) { SyncInterval.HOURS_12 }
         set(value) = prefs.edit().putString("sync_interval", value.name).apply()
 
+    var playlistSyncFrequency: PlaylistSyncFrequency
+        get() = try {
+            PlaylistSyncFrequency.valueOf(prefs.getString("playlist_sync_frequency", PlaylistSyncFrequency.DAYS_3.name)!!)
+        } catch (_: Exception) { PlaylistSyncFrequency.DAYS_3 }
+        set(value) = prefs.edit().putString("playlist_sync_frequency", value.name).apply()
+
     var customEpgUrl: String
         get() = prefs.getString("custom_epg_url", "") ?: ""
         set(value) = prefs.edit().putString("custom_epg_url", value).apply()
@@ -250,9 +268,17 @@ class AppSettings private constructor(context: Context) {
         get() = prefs.getBoolean("ask_profile_startup", false)
         set(value) = prefs.edit().putBoolean("ask_profile_startup", value).apply()
 
+    var activeProfileId: String
+        get() = prefs.getString("active_profile_id", "default") ?: "default"
+        set(value) = prefs.edit().putString("active_profile_id", value).apply()
+
     var activeProfileName: String
         get() = prefs.getString("active_profile_name", "Main Profile") ?: "Main Profile"
         set(value) = prefs.edit().putString("active_profile_name", value).apply()
+
+    var activeProfileIsChild: Boolean
+        get() = prefs.getBoolean("active_profile_is_child", false)
+        set(value) = prefs.edit().putBoolean("active_profile_is_child", value).apply()
 
     // Trakt Integration
     var isTraktConnected: Boolean
