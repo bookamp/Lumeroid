@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import org.getlume.android.core.data.dao.*
 import org.getlume.android.core.data.entities.*
 
@@ -21,7 +23,7 @@ import org.getlume.android.core.data.entities.*
         SportsFollowEntity::class,
         RecordingEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class LumeDatabase : RoomDatabase() {
@@ -33,10 +35,18 @@ abstract class LumeDatabase : RoomDatabase() {
     abstract fun watchProgressDao(): WatchProgressDao
     abstract fun sportsDao(): SportsDao
     abstract fun recordingDao(): RecordingDao
+    abstract fun profileDao(): ProfileDao
 
     companion object {
         @Volatile
         private var INSTANCE: LumeDatabase? = null
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE playlists ADD COLUMN syncEnabled INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN lastSyncDate INTEGER NOT NULL DEFAULT 0")
+            }
+        }
 
         fun getInstance(context: Context): LumeDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -44,7 +54,10 @@ abstract class LumeDatabase : RoomDatabase() {
                     context.applicationContext,
                     LumeDatabase::class.java,
                     "lume.db"
-                ).fallbackToDestructiveMigration().build()
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }
