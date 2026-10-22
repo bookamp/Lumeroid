@@ -77,6 +77,21 @@ enum class ExternalPlayerScope(val title: String) {
 class AppSettings private constructor(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("lume_settings", Context.MODE_PRIVATE)
 
+    private val _revision = MutableStateFlow(0)
+    val revision: StateFlow<Int> = _revision.asStateFlow()
+
+    private val prefChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        _revision.value++
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(prefChangeListener)
+    }
+
+    fun notifyChanged() {
+        _revision.value++
+    }
+
     // Player Settings
     var playerEngine: PlayerEngineType
         get() = try {
@@ -195,23 +210,73 @@ class AppSettings private constructor(context: Context) {
     // Library Settings
     var libraryShowMovies: Boolean
         get() = prefs.getBoolean("lib_show_movies", true)
-        set(value) = prefs.edit().putBoolean("lib_show_movies", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("lib_show_movies", value).apply()
+            notifyChanged()
+        }
 
     var libraryShowSeries: Boolean
         get() = prefs.getBoolean("lib_show_series", true)
-        set(value) = prefs.edit().putBoolean("lib_show_series", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("lib_show_series", value).apply()
+            notifyChanged()
+        }
 
     var libraryShowLiveTV: Boolean
         get() = prefs.getBoolean("lib_show_livetv", true)
-        set(value) = prefs.edit().putBoolean("lib_show_livetv", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("lib_show_livetv", value).apply()
+            notifyChanged()
+        }
 
     var libraryShowSports: Boolean
         get() = prefs.getBoolean("lib_show_sports", true)
-        set(value) = prefs.edit().putBoolean("lib_show_sports", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("lib_show_sports", value).apply()
+            notifyChanged()
+        }
 
     var searchAllPlaylists: Boolean
         get() = prefs.getBoolean("search_all_playlists", false)
-        set(value) = prefs.edit().putBoolean("search_all_playlists", value).apply()
+        set(value) {
+            prefs.edit().putBoolean("search_all_playlists", value).apply()
+            notifyChanged()
+        }
+
+    fun isPlaylistTabVisible(playlistId: String, tab: String): Boolean {
+        if (playlistId.isBlank()) {
+            return when (tab.lowercase()) {
+                "movies" -> libraryShowMovies
+                "series" -> libraryShowSeries
+                "livetv", "live tv" -> libraryShowLiveTV
+                else -> true
+            }
+        }
+        val key = "lib_show_${tab.lowercase().replace(" ", "")}_$playlistId"
+        return if (prefs.contains(key)) {
+            prefs.getBoolean(key, true)
+        } else {
+            when (tab.lowercase()) {
+                "movies" -> libraryShowMovies
+                "series" -> libraryShowSeries
+                "livetv", "live tv" -> libraryShowLiveTV
+                else -> true
+            }
+        }
+    }
+
+    fun setPlaylistTabVisible(playlistId: String, tab: String, visible: Boolean) {
+        if (playlistId.isNotBlank()) {
+            val key = "lib_show_${tab.lowercase().replace(" ", "")}_$playlistId"
+            prefs.edit().putBoolean(key, visible).apply()
+        }
+        when (tab.lowercase()) {
+            "movies" -> libraryShowMovies = visible
+            "series" -> libraryShowSeries = visible
+            "livetv", "live tv" -> libraryShowLiveTV = visible
+        }
+        notifyChanged()
+    }
 
     // Home Layout Settings
     var homeShowContinueWatching: Boolean
@@ -366,10 +431,48 @@ class AppSettings private constructor(context: Context) {
         get() = prefs.getBoolean("android_tv_channels_enabled", true)
         set(value) = prefs.edit().putBoolean("android_tv_channels_enabled", value).apply()
 
+    var epgLastSyncDate: Long
+        get() = prefs.getLong("epg_last_sync_date", 0L)
+        set(value) = prefs.edit().putLong("epg_last_sync_date", value).apply()
+
+    var lastSportsRefreshDate: Long
+        get() = prefs.getLong("last_sports_refresh_date", 0L)
+        set(value) = prefs.edit().putLong("last_sports_refresh_date", value).apply()
+
     var homeSectionOrder: String
         get() = prefs.getString("home_section_order", "recentlyWatched,favorites,forYou,trendingMovies,trendingSeries,traktWatchlist,simklWatchlist,sports")
             ?: "recentlyWatched,favorites,forYou,trendingMovies,trendingSeries,traktWatchlist,simklWatchlist,sports"
         set(value) = prefs.edit().putString("home_section_order", value).apply()
+
+    var homeDisabledSections: Set<String>
+        get() = prefs.getStringSet("home_disabled_sections", emptySet()) ?: emptySet()
+        set(value) = prefs.edit().putStringSet("home_disabled_sections", value).apply()
+
+    fun isHomeSectionEnabled(sectionKey: String): Boolean {
+        return !homeDisabledSections.contains(sectionKey)
+    }
+
+    fun setHomeSectionEnabled(sectionKey: String, isEnabled: Boolean) {
+        val current = homeDisabledSections.toMutableSet()
+        if (isEnabled) {
+            current.remove(sectionKey)
+        } else {
+            current.add(sectionKey)
+        }
+        homeDisabledSections = current
+    }
+
+    var homeLayoutStyle: String
+        get() = prefs.getString("home_layout_style", "Rows") ?: "Rows"
+        set(value) = prefs.edit().putString("home_layout_style", value).apply()
+
+    var homeItemsPerSection: Int
+        get() = prefs.getInt("home_items_per_section", 10)
+        set(value) = prefs.edit().putInt("home_items_per_section", value).apply()
+
+    var exoPlayerProbeSizeMb: Int
+        get() = prefs.getInt("exoplayer_probe_size_mb", 0)
+        set(value) = prefs.edit().putInt("exoplayer_probe_size_mb", value).apply()
 
     var enginePriority: String
         get() = prefs.getString("engine_priority", "exoplayer_hw,exoplayer_tunneled,vlc_sw") ?: "exoplayer_hw,exoplayer_tunneled,vlc_sw"
