@@ -23,7 +23,7 @@ import org.getlume.android.core.data.entities.*
         SportsFollowEntity::class,
         RecordingEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class LumeDatabase : RoomDatabase() {
@@ -48,6 +48,12 @@ abstract class LumeDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE channels ADD COLUMN isHidden INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context): LumeDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -55,7 +61,7 @@ abstract class LumeDatabase : RoomDatabase() {
                     LumeDatabase::class.java,
                     "lume.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
