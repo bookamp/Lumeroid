@@ -1,6 +1,7 @@
 package org.getlume.android.core.player
 
 import org.getlume.android.core.data.entities.ChannelEntity
+import org.getlume.android.core.data.entities.EpgListingEntity
 import org.getlume.android.core.data.entities.EpisodeEntity
 import org.getlume.android.core.data.entities.MovieEntity
 
@@ -29,6 +30,26 @@ fun ChannelEntity.toPlayableMedia(): PlayableMedia {
         posterUrl = logoUrl,
         isLive = true,
         channelNumber = channelNumber
+    )
+}
+
+fun ChannelEntity.toCatchupPlayableMedia(program: EpgListingEntity): PlayableMedia {
+    val durationSec = ((program.endTime - program.startTime) / 1000L).coerceAtLeast(60L)
+    val startSec = program.startTime / 1000L
+    val catchupUrl = when (catchupType) {
+        "flussonic" -> streamUrl.replace(".m3u8", "-timeshift-$startSec-$durationSec.m3u8")
+        "xc" -> streamUrl.replace("/live/", "/timeshift/")
+        else -> streamUrl
+    }
+    return PlayableMedia(
+        id = "${id}-catchup-${program.id}",
+        title = program.title,
+        subtitle = "$name • Catchup Replay",
+        streamUrl = catchupUrl,
+        posterUrl = logoUrl,
+        isLive = false,
+        channelNumber = channelNumber,
+        durationMs = (program.endTime - program.startTime).coerceAtLeast(60000L)
     )
 }
 
