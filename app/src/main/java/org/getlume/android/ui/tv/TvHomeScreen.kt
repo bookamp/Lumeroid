@@ -15,13 +15,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
@@ -42,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,6 +61,7 @@ import org.getlume.android.core.data.entities.WatchProgressEntity
 import org.getlume.android.core.designsystem.*
 import org.getlume.android.core.player.PlayableMedia
 import org.getlume.android.core.player.toPlayableMedia
+import org.getlume.android.core.settings.AppSettings
 import org.getlume.android.core.sync.ContentSyncManager
 import java.util.Locale
 
@@ -96,6 +102,8 @@ fun TvHomeScreen(
     onMoveUpToTopBar: (() -> Unit)? = null
 ) {
     val db = LumeApp.instance.database
+    val settings = remember { AppSettings.get() }
+    val revision by settings.revision.collectAsState()
     val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
     val playlistId = activePlaylist?.id ?: ""
 
@@ -236,6 +244,116 @@ fun TvHomeScreen(
     val seriesRowFocusRequester = remember { FocusRequester() }
     val channelsRowFocusRequester = remember { FocusRequester() }
 
+    val cwListState = rememberLazyListState()
+    val favListState = rememberLazyListState()
+    val moviesListState = rememberLazyListState()
+    val seriesListState = rememberLazyListState()
+    val channelsListState = rememberLazyListState()
+
+    var cwFocusedIndex by remember { mutableIntStateOf(0) }
+    var favFocusedIndex by remember { mutableIntStateOf(0) }
+    var moviesFocusedIndex by remember { mutableIntStateOf(0) }
+    var seriesFocusedIndex by remember { mutableIntStateOf(0) }
+    var channelsFocusedIndex by remember { mutableIntStateOf(0) }
+
+    val showCw = settings.isHomeSectionEnabled("recentlyWatched") && settings.homeShowContinueWatching && continueWatching.isNotEmpty()
+    val showFav = settings.isHomeSectionEnabled("favorites") && (favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty())
+    val showMovies = settings.isHomeSectionEnabled("trendingMovies") && settings.isPlaylistTabVisible(playlistId, "movies") && movies.isNotEmpty()
+    val showSeries = settings.isHomeSectionEnabled("trendingSeries") && settings.isPlaylistTabVisible(playlistId, "series") && seriesList.isNotEmpty()
+    val showChannels = settings.isHomeSectionEnabled("liveTv") && settings.isPlaylistTabVisible(playlistId, "livetv") && channels.isNotEmpty()
+
+    val scrollToHeroAndFocus: () -> Unit = {
+        homeCoroutineScope.launch {
+            scrollState.animateScrollTo(0)
+            try { heroFocusRequester.requestFocus() } catch (_: Exception) {}
+        }
+    }
+
+    val focusRailSafe: (LazyListState, FocusRequester, () -> Unit) -> Unit = { listState, focusRequester, resetIndex ->
+        homeCoroutineScope.launch {
+            try {
+                focusRequester.requestFocus()
+            } catch (_: Exception) {
+                try {
+                    resetIndex()
+                    listState.scrollToItem(0)
+                    delay(50)
+                    focusRequester.requestFocus()
+                } catch (_: Exception) {
+                    scrollToHeroAndFocus()
+                }
+            }
+        }
+    }
+
+    val focusFirstVisibleRail: () -> Boolean = {
+        val target: Triple<LazyListState, FocusRequester, () -> Unit>? = when {
+            showCw -> Triple(cwListState, cwRowFocusRequester) { cwFocusedIndex = 0 }
+            showFav -> Triple(favListState, favRowFocusRequester) { favFocusedIndex = 0 }
+            showMovies -> Triple(moviesListState, moviesRowFocusRequester) { moviesFocusedIndex = 0 }
+            showSeries -> Triple(seriesListState, seriesRowFocusRequester) { seriesFocusedIndex = 0 }
+            showChannels -> Triple(channelsListState, channelsRowFocusRequester) { channelsFocusedIndex = 0 }
+            else -> null
+        }
+        if (target != null) {
+            val (listState, focusRequester, resetIndex) = target
+            homeCoroutineScope.launch {
+                try {
+                    focusRequester.requestFocus()
+                } catch (_: Exception) {
+                    try {
+                        resetIndex()
+                        listState.scrollToItem(0)
+                        delay(50)
+                        focusRequester.requestFocus()
+                    } catch (_: Exception) {}
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    val moveUpFromCw: () -> Unit = {
+        scrollToHeroAndFocus()
+    }
+
+    val moveUpFromFav: () -> Unit = {
+        if (showCw) {
+            focusRailSafe(cwListState, cwRowFocusRequester) { cwFocusedIndex = 0 }
+        } else {
+            scrollToHeroAndFocus()
+        }
+    }
+
+    val moveUpFromMovies: () -> Unit = {
+        when {
+            showFav -> focusRailSafe(favListState, favRowFocusRequester) { favFocusedIndex = 0 }
+            showCw -> focusRailSafe(cwListState, cwRowFocusRequester) { cwFocusedIndex = 0 }
+            else -> scrollToHeroAndFocus()
+        }
+    }
+
+    val moveUpFromSeries: () -> Unit = {
+        when {
+            showMovies -> focusRailSafe(moviesListState, moviesRowFocusRequester) { moviesFocusedIndex = 0 }
+            showFav -> focusRailSafe(favListState, favRowFocusRequester) { favFocusedIndex = 0 }
+            showCw -> focusRailSafe(cwListState, cwRowFocusRequester) { cwFocusedIndex = 0 }
+            else -> scrollToHeroAndFocus()
+        }
+    }
+
+    val moveUpFromChannels: () -> Unit = {
+        when {
+            showSeries -> focusRailSafe(seriesListState, seriesRowFocusRequester) { seriesFocusedIndex = 0 }
+            showMovies -> focusRailSafe(moviesListState, moviesRowFocusRequester) { moviesFocusedIndex = 0 }
+            showFav -> focusRailSafe(favListState, favRowFocusRequester) { favFocusedIndex = 0 }
+            showCw -> focusRailSafe(cwListState, cwRowFocusRequester) { cwFocusedIndex = 0 }
+            else -> scrollToHeroAndFocus()
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -322,7 +440,7 @@ fun TvHomeScreen(
                         onMoveLeft = {},
                         onMoveRight = {},
                         onMoveUp = { onMoveUpToTopBar?.invoke() },
-                        onMoveDown = {},
+                        onMoveDown = { false },
                         onClick = onOpenSetup
                     )
                 }
@@ -416,17 +534,7 @@ fun TvHomeScreen(
                                     onMoveUp = {
                                         onMoveUpToTopBar?.invoke()
                                     },
-                                    onMoveDown = {
-                                        try {
-                                            when {
-                                                continueWatching.isNotEmpty() -> cwRowFocusRequester.requestFocus()
-                                                favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty() -> favRowFocusRequester.requestFocus()
-                                                movies.isNotEmpty() -> moviesRowFocusRequester.requestFocus()
-                                                seriesList.isNotEmpty() -> seriesRowFocusRequester.requestFocus()
-                                                channels.isNotEmpty() -> channelsRowFocusRequester.requestFocus()
-                                            }
-                                        } catch (_: Exception) {}
-                                    },
+                                    onMoveDown = focusFirstVisibleRail,
                                     onClick = {
                                         when {
                                             currentHero.movie != null -> selectedMovie = currentHero.movie
@@ -452,88 +560,6 @@ fun TvHomeScreen(
                 }
 
                 // CONTENT RAILS (Apple TV HomeRows)
-                val coroutineScope = rememberCoroutineScope()
-
-                val isCwFirst = continueWatching.isNotEmpty()
-                val isFavFirst = !isCwFirst && (favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty())
-                val isMoviesFirst = !isCwFirst && !isFavFirst && movies.isNotEmpty()
-                val isSeriesFirst = !isCwFirst && !isFavFirst && !isMoviesFirst && seriesList.isNotEmpty()
-                val isChannelsFirst = !isCwFirst && !isFavFirst && !isMoviesFirst && !isSeriesFirst && channels.isNotEmpty()
-
-                val firstRowFocusRequester = when {
-                    isCwFirst -> cwRowFocusRequester
-                    isFavFirst -> favRowFocusRequester
-                    isMoviesFirst -> moviesRowFocusRequester
-                    isSeriesFirst -> seriesRowFocusRequester
-                    else -> channelsRowFocusRequester
-                }
-
-                val scrollToHeroAndFocus: () -> Unit = {
-                    coroutineScope.launch {
-                        scrollState.animateScrollTo(0)
-                        try { heroFocusRequester.requestFocus() } catch (_: Exception) {}
-                    }
-                }
-
-                val moveUpFromCw: () -> Unit = {
-                    scrollToHeroAndFocus()
-                }
-
-                val moveUpFromFav: () -> Unit = {
-                    if (continueWatching.isNotEmpty()) {
-                        try { cwRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                    } else {
-                        scrollToHeroAndFocus()
-                    }
-                }
-
-                val moveUpFromMovies: () -> Unit = {
-                    when {
-                        favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty() -> {
-                            try { favRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        continueWatching.isNotEmpty() -> {
-                            try { cwRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        else -> scrollToHeroAndFocus()
-                    }
-                }
-
-                val moveUpFromSeries: () -> Unit = {
-                    when {
-                        movies.isNotEmpty() -> {
-                            try { moviesRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty() -> {
-                            try { favRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        continueWatching.isNotEmpty() -> {
-                            try { cwRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        else -> scrollToHeroAndFocus()
-                    }
-                }
-
-                val moveUpFromChannels: () -> Unit = {
-                    when {
-                        seriesList.isNotEmpty() -> {
-                            try { seriesRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        movies.isNotEmpty() -> {
-                            try { moviesRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty() -> {
-                            try { favRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        continueWatching.isNotEmpty() -> {
-                            try { cwRowFocusRequester.requestFocus() } catch (_: Exception) { scrollToHeroAndFocus() }
-                        }
-                        else -> scrollToHeroAndFocus()
-                    }
-                }
-
-
-
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -541,21 +567,23 @@ fun TvHomeScreen(
                     verticalArrangement = Arrangement.spacedBy(36.dp)
                 ) {
                     // Rail 1: Recently Watched (Continue Watching with progress bar)
-                    if (continueWatching.isNotEmpty()) {
+                    if (showCw) {
                         TvContentRail(
-                            title = "Recently Watched",
-                            onSeeAll = null
+                            title = "Recently Watched"
                         ) {
+                            val itemsToShow = continueWatching.take(settings.homeItemsPerSection)
                             LazyRow(
+                                state = cwListState,
                                 contentPadding = PaddingValues(horizontal = 56.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                itemsIndexed(continueWatching) { index, item ->
-                                    val cardFocusRequester = if (index == 0) cwRowFocusRequester else remember { FocusRequester() }
+                                itemsIndexed(itemsToShow) { index, item ->
+                                    val cardFocusRequester = if (index == cwFocusedIndex.coerceIn(0, (itemsToShow.size - 1).coerceAtLeast(0))) cwRowFocusRequester else remember { FocusRequester() }
                                     TvContinueWatchingRailCard(
                                         item = item,
                                         focusRequester = cardFocusRequester,
+                                        onFocused = { cwFocusedIndex = index },
                                         onMoveUp = moveUpFromCw,
                                         onClick = {
                                             val media = PlayableMedia(
@@ -575,103 +603,188 @@ fun TvHomeScreen(
                     }
 
                     // Rail 2: Favorites (Channels & Movies)
-                    if (favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty()) {
+                    if (showFav) {
                         TvContentRail(
-                            title = "Favorites",
-                            onSeeAll = onOpenLiveTv
+                            title = "Favorites"
                         ) {
+                            val chanItems = favoriteChannels.take(settings.homeItemsPerSection)
+                            val favMovieItems = favoriteMovies.take(settings.homeItemsPerSection)
+                            val hasSeeAll = true
+                            val totalFavItems = chanItems.size + favMovieItems.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
+                                state = favListState,
                                 contentPadding = PaddingValues(horizontal = 56.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                itemsIndexed(favoriteChannels) { index, channel ->
-                                    val cardFocusRequester = if (index == 0) favRowFocusRequester else remember { FocusRequester() }
+                                itemsIndexed(chanItems) { index, channel ->
+                                    val cardFocusRequester = if (index == favFocusedIndex.coerceIn(0, (totalFavItems - 1).coerceAtLeast(0))) favRowFocusRequester else remember { FocusRequester() }
                                     TvLiveChannelRailCard(
                                         channel = channel,
                                         focusRequester = cardFocusRequester,
+                                        onFocused = { favFocusedIndex = index },
                                         onMoveUp = moveUpFromFav,
                                         onClick = { onPlayMedia(channel.toPlayableMedia()) }
                                     )
                                 }
-                                items(favoriteMovies) { movie ->
+                                itemsIndexed(favMovieItems) { mIdx, movie ->
+                                    val actualIndex = chanItems.size + mIdx
+                                    val cardFocusRequester = if (actualIndex == favFocusedIndex.coerceIn(0, (totalFavItems - 1).coerceAtLeast(0))) favRowFocusRequester else remember { FocusRequester() }
                                     TvMovieRailCard(
                                         movie = movie,
+                                        focusRequester = cardFocusRequester,
+                                        onFocused = { favFocusedIndex = actualIndex },
                                         onMoveUp = moveUpFromFav,
                                         onClick = { selectedMovie = movie }
                                     )
+                                }
+                                if (hasSeeAll) {
+                                    item {
+                                        val seeAllIndex = chanItems.size + favMovieItems.size
+                                        val cardFocusRequester = if (seeAllIndex == favFocusedIndex.coerceIn(0, (totalFavItems - 1).coerceAtLeast(0))) favRowFocusRequester else remember { FocusRequester() }
+                                        TvSeeAllRailCard(
+                                            title = "See All",
+                                            subtitle = "Favorites",
+                                            modifier = Modifier.width(if (favMovieItems.isNotEmpty()) 150.dp else 180.dp),
+                                            cardModifier = if (favMovieItems.isNotEmpty()) Modifier.fillMaxWidth().aspectRatio(2f / 3f) else Modifier.fillMaxWidth().height(110.dp),
+                                            focusRequester = cardFocusRequester,
+                                            onFocused = { favFocusedIndex = seeAllIndex },
+                                            onMoveUp = moveUpFromFav,
+                                            onClick = onOpenLiveTv
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
 
                     // Rail 3: Trending Movies (from active IPTV connection)
-                    if (movies.isNotEmpty()) {
+                    if (showMovies) {
                         TvContentRail(
-                            title = "Trending Movies",
-                            onSeeAll = onOpenMovies
+                            title = "Trending Movies"
                         ) {
+                            val itemsToShow = movies.take(settings.homeItemsPerSection)
+                            val hasSeeAll = true
+                            val totalMovieItems = itemsToShow.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
+                                state = moviesListState,
                                 contentPadding = PaddingValues(horizontal = 56.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                itemsIndexed(movies) { index, movie ->
-                                    val cardFocusRequester = if (index == 0) moviesRowFocusRequester else remember { FocusRequester() }
+                                itemsIndexed(itemsToShow) { index, movie ->
+                                    val cardFocusRequester = if (index == moviesFocusedIndex.coerceIn(0, (totalMovieItems - 1).coerceAtLeast(0))) moviesRowFocusRequester else remember { FocusRequester() }
                                     TvMovieRailCard(
                                         movie = movie,
                                         focusRequester = cardFocusRequester,
+                                        onFocused = { moviesFocusedIndex = index },
                                         onMoveUp = moveUpFromMovies,
                                         onClick = { selectedMovie = movie }
                                     )
+                                }
+                                if (hasSeeAll) {
+                                    item {
+                                        val seeAllIndex = itemsToShow.size
+                                        val cardFocusRequester = if (seeAllIndex == moviesFocusedIndex.coerceIn(0, (totalMovieItems - 1).coerceAtLeast(0))) moviesRowFocusRequester else remember { FocusRequester() }
+                                        TvSeeAllRailCard(
+                                            title = "See All",
+                                            subtitle = "Movies",
+                                            modifier = Modifier.width(150.dp),
+                                            cardModifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+                                            focusRequester = cardFocusRequester,
+                                            onFocused = { moviesFocusedIndex = seeAllIndex },
+                                            onMoveUp = moveUpFromMovies,
+                                            onClick = onOpenMovies
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
 
                     // Rail 4: Popular TV Series (from active IPTV connection)
-                    if (seriesList.isNotEmpty()) {
+                    if (showSeries) {
                         TvContentRail(
-                            title = "Popular Series",
-                            onSeeAll = onOpenSeries
+                            title = "Popular Series"
                         ) {
+                            val itemsToShow = seriesList.take(settings.homeItemsPerSection)
+                            val hasSeeAll = true
+                            val totalSeriesItems = itemsToShow.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
+                                state = seriesListState,
                                 contentPadding = PaddingValues(horizontal = 56.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                itemsIndexed(seriesList) { index, series ->
-                                    val cardFocusRequester = if (index == 0) seriesRowFocusRequester else remember { FocusRequester() }
+                                itemsIndexed(itemsToShow) { index, series ->
+                                    val cardFocusRequester = if (index == seriesFocusedIndex.coerceIn(0, (totalSeriesItems - 1).coerceAtLeast(0))) seriesRowFocusRequester else remember { FocusRequester() }
                                     TvSeriesRailCard(
                                         series = series,
                                         focusRequester = cardFocusRequester,
+                                        onFocused = { seriesFocusedIndex = index },
                                         onMoveUp = moveUpFromSeries,
                                         onClick = { selectedSeries = series }
                                     )
+                                }
+                                if (hasSeeAll) {
+                                    item {
+                                        val seeAllIndex = itemsToShow.size
+                                        val cardFocusRequester = if (seeAllIndex == seriesFocusedIndex.coerceIn(0, (totalSeriesItems - 1).coerceAtLeast(0))) seriesRowFocusRequester else remember { FocusRequester() }
+                                        TvSeeAllRailCard(
+                                            title = "See All",
+                                            subtitle = "TV Shows",
+                                            modifier = Modifier.width(150.dp),
+                                            cardModifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+                                            focusRequester = cardFocusRequester,
+                                            onFocused = { seriesFocusedIndex = seeAllIndex },
+                                            onMoveUp = moveUpFromSeries,
+                                            onClick = onOpenSeries
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
 
                     // Rail 5: Live Channels (On Air Now)
-                    if (channels.isNotEmpty()) {
+                    if (showChannels) {
                         TvContentRail(
-                            title = "On Air Now",
-                            onSeeAll = onOpenLiveTv
+                            title = "On Air Now"
                         ) {
+                            val itemsToShow = channels.take(settings.homeItemsPerSection.coerceAtLeast(10))
+                            val hasSeeAll = true
+                            val totalChannelItems = itemsToShow.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
+                                state = channelsListState,
                                 contentPadding = PaddingValues(horizontal = 56.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                itemsIndexed(channels.take(30)) { index, channel ->
-                                    val cardFocusRequester = if (index == 0) channelsRowFocusRequester else remember { FocusRequester() }
+                                itemsIndexed(itemsToShow) { index, channel ->
+                                    val cardFocusRequester = if (index == channelsFocusedIndex.coerceIn(0, (totalChannelItems - 1).coerceAtLeast(0))) channelsRowFocusRequester else remember { FocusRequester() }
                                     TvLiveChannelRailCard(
                                         channel = channel,
                                         focusRequester = cardFocusRequester,
+                                        onFocused = { channelsFocusedIndex = index },
                                         onMoveUp = moveUpFromChannels,
                                         onClick = { onPlayMedia(channel.toPlayableMedia()) }
                                     )
+                                }
+                                if (hasSeeAll) {
+                                    item {
+                                        val seeAllIndex = itemsToShow.size
+                                        val cardFocusRequester = if (seeAllIndex == channelsFocusedIndex.coerceIn(0, (totalChannelItems - 1).coerceAtLeast(0))) channelsRowFocusRequester else remember { FocusRequester() }
+                                        TvSeeAllRailCard(
+                                            title = "See All",
+                                            subtitle = "Channels",
+                                            modifier = Modifier.width(180.dp),
+                                            cardModifier = Modifier.fillMaxWidth().height(110.dp),
+                                            focusRequester = cardFocusRequester,
+                                            onFocused = { channelsFocusedIndex = seeAllIndex },
+                                            onMoveUp = moveUpFromChannels,
+                                            onClick = onOpenLiveTv
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -708,7 +821,6 @@ fun TvHomeScreen(
 @Composable
 private fun TvContentRail(
     title: String,
-    onSeeAll: (() -> Unit)?,
     content: @Composable () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -716,8 +828,7 @@ private fun TvContentRail(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 56.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = title,
@@ -725,19 +836,6 @@ private fun TvContentRail(
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
-            if (onSeeAll != null) {
-                Text(
-                    text = "SEE ALL ▶",
-                    color = LumeAccentBlue,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable { onSeeAll() }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-            }
         }
 
         content()
@@ -745,15 +843,139 @@ private fun TvContentRail(
 }
 
 @Composable
+private fun TvSeeAllRailCard(
+    title: String = "See All",
+    subtitle: String? = null,
+    modifier: Modifier = Modifier.width(150.dp),
+    cardModifier: Modifier = Modifier.fillMaxWidth().aspectRatio(2f / 3f),
+    focusRequester: FocusRequester = remember { FocusRequester() },
+    onFocused: (() -> Unit)? = null,
+    onMoveUp: (() -> Unit)? = null,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f, label = "seeAllScale")
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            onFocused?.invoke()
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .scale(scale)
+            .focusRequester(focusRequester)
+            .onPreviewKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
+                    if (onMoveUp != null) {
+                        onMoveUp()
+                        true
+                    } else false
+                } else false
+            }
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = cardModifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(
+                    if (isFocused) {
+                        Brush.verticalGradient(
+                            listOf(
+                                LumeAccentBlue.copy(alpha = 0.35f),
+                                Color(0xFF1B2333)
+                            )
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xFF181C26),
+                                Color(0xFF10131B)
+                            )
+                        )
+                    }
+                )
+                .border(
+                    width = if (isFocused) 2.5.dp else 1.dp,
+                    color = if (isFocused) Color.White else Color.White.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(14.dp)
+                )
+                .padding(12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.08f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = if (isFocused) Color.White else Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Text(
+                    text = title,
+                    color = if (isFocused) Color.White else Color.White.copy(alpha = 0.90f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        color = if (isFocused) Color.White.copy(alpha = 0.80f) else LumeTextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+
+        Text(
+            text = "Browse All",
+            color = if (isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.70f),
+            fontSize = 13.sp,
+            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
 private fun TvLiveChannelRailCard(
     channel: ChannelEntity,
     focusRequester: FocusRequester = remember { FocusRequester() },
+    onFocused: (() -> Unit)? = null,
     onMoveUp: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f, label = "chanScale")
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            onFocused?.invoke()
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -826,12 +1048,19 @@ private fun TvLiveChannelRailCard(
 private fun TvMovieRailCard(
     movie: MovieEntity,
     focusRequester: FocusRequester = remember { FocusRequester() },
+    onFocused: (() -> Unit)? = null,
     onMoveUp: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f, label = "movieScale")
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            onFocused?.invoke()
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -906,12 +1135,19 @@ private fun TvMovieRailCard(
 private fun TvSeriesRailCard(
     series: SeriesEntity,
     focusRequester: FocusRequester = remember { FocusRequester() },
+    onFocused: (() -> Unit)? = null,
     onMoveUp: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f, label = "seriesScale")
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            onFocused?.invoke()
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -986,6 +1222,7 @@ private fun TvSeriesRailCard(
 private fun TvContinueWatchingRailCard(
     item: WatchProgressEntity,
     focusRequester: FocusRequester = remember { FocusRequester() },
+    onFocused: (() -> Unit)? = null,
     onMoveUp: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
@@ -993,6 +1230,12 @@ private fun TvContinueWatchingRailCard(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f, label = "cwScale")
     val progressFraction = if (item.durationMs > 0) (item.positionMs.toFloat() / item.durationMs.toFloat()).coerceIn(0f, 1f) else 0.5f
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            onFocused?.invoke()
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -1070,7 +1313,7 @@ private fun TvShowcaseDetailsPill(
     onMoveLeft: () -> Unit,
     onMoveRight: () -> Unit,
     onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
+    onMoveDown: () -> Boolean,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -1102,7 +1345,6 @@ private fun TvShowcaseDetailsPill(
                         }
                         Key.DirectionDown -> {
                             onMoveDown()
-                            true
                         }
                         else -> false
                     }
