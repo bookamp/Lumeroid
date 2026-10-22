@@ -54,7 +54,8 @@ data class ChannelEntity(
     val catchupType: String = "",
     val catchupDays: Int = 0,
     val isFavorite: Boolean = false,
-    val sortOrder: Int = 0
+    val sortOrder: Int = 0,
+    val isHidden: Boolean = false
 )
 
 @Entity(
