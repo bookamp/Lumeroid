@@ -28,6 +28,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import org.getlume.android.core.settings.AppSettings
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -149,8 +150,11 @@ fun TvSearchScreen(
         }
     }
 
-    // Execute multi-type search when query or filter changes
-    LaunchedEffect(debouncedSearchText, selectedFilter, playlistId) {
+    val settings = remember { AppSettings.get() }
+    val revision by settings.revision.collectAsState()
+
+    // Execute multi-type search when query, filter, playlist, or settings change
+    LaunchedEffect(debouncedSearchText, selectedFilter, playlistId, revision) {
         val query = debouncedSearchText.trim()
         if (query.isEmpty()) {
             searchResults = emptyList()
@@ -164,9 +168,11 @@ fun TvSearchScreen(
             val wantSeries = selectedFilter == SearchContentFilter.ALL || selectedFilter == SearchContentFilter.SERIES
             val wantLive = selectedFilter == SearchContentFilter.ALL || selectedFilter == SearchContentFilter.LIVE_TV
 
-            val movies = if (wantMovies) db.vodDao().searchMovies(playlistId, query) else emptyList()
-            val series = if (wantSeries) db.vodDao().searchSeries(playlistId, query) else emptyList()
-            val channels = if (wantLive) db.channelDao().searchChannels(playlistId, query) else emptyList()
+            val searchPlaylistId = if (settings.searchAllPlaylists) "" else playlistId
+
+            val movies = if (wantMovies) db.vodDao().searchMovies(searchPlaylistId, query) else emptyList()
+            val series = if (wantSeries) db.vodDao().searchSeries(searchPlaylistId, query) else emptyList()
+            val channels = if (wantLive) db.channelDao().searchChannels(searchPlaylistId, query) else emptyList()
 
             val combined = mutableListOf<SearchResultItem>()
             movies.forEach { combined.add(SearchResultItem.Movie(it)) }
