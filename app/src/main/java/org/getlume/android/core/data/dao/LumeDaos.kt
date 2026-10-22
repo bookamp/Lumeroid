@@ -42,13 +42,16 @@ interface PlaylistDao {
 
 @Dao
 interface ChannelDao {
-    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND categoryId = :categoryId ORDER BY sortOrder ASC, channelNumber ASC")
+    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND categoryId = :categoryId AND isHidden = 0 ORDER BY sortOrder ASC, channelNumber ASC")
     fun getChannelsByCategory(playlistId: String, categoryId: String): Flow<List<ChannelEntity>>
 
-    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND isFavorite = 1 ORDER BY sortOrder ASC")
+    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND isFavorite = 1 AND isHidden = 0 ORDER BY sortOrder ASC")
     fun getFavoriteChannels(playlistId: String): Flow<List<ChannelEntity>>
 
-    @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY sortOrder ASC, channelNumber ASC")
+    @Query("SELECT c.* FROM channels c INNER JOIN watch_progress w ON c.id = w.contentId WHERE w.profileId = :profileId AND w.contentType = 'channel' AND c.playlistId = :playlistId AND c.isHidden = 0 ORDER BY w.lastWatchedAt DESC LIMIT 50")
+    fun getRecentlyWatchedChannels(playlistId: String, profileId: String): Flow<List<ChannelEntity>>
+
+    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND isHidden = 0 AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) ORDER BY sortOrder ASC, channelNumber ASC")
     fun observeChannelsByPlaylist(playlistId: String): Flow<List<ChannelEntity>>
 
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId ORDER BY sortOrder ASC")
@@ -57,17 +60,35 @@ interface ChannelDao {
     @Query("SELECT * FROM channels WHERE id = :channelId LIMIT 1")
     suspend fun getChannelById(channelId: String): ChannelEntity?
 
-    @Query("SELECT * FROM channels WHERE name LIKE '%' || :query || '%' LIMIT 50")
+    @Query("SELECT * FROM channels WHERE isHidden = 0 AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND name LIKE '%' || :query || '%' LIMIT 50")
     suspend fun searchChannels(query: String): List<ChannelEntity>
 
-    @Query("SELECT * FROM channels WHERE (playlistId = :playlistId OR :playlistId = '') AND name LIKE '%' || :query || '%' LIMIT 50")
+    @Query("SELECT * FROM channels WHERE (playlistId = :playlistId OR :playlistId = '') AND isHidden = 0 AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND name LIKE '%' || :query || '%' LIMIT 50")
     suspend fun searchChannels(playlistId: String, query: String): List<ChannelEntity>
+
+    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND categoryId = :categoryId ORDER BY sortOrder ASC, channelNumber ASC")
+    fun getChannelsForManagement(playlistId: String, categoryId: String): Flow<List<ChannelEntity>>
+
+    @Query("UPDATE channels SET isHidden = :isHidden WHERE id = :channelId")
+    suspend fun updateChannelHidden(channelId: String, isHidden: Boolean)
+
+    @Query("UPDATE channels SET isHidden = :isHidden WHERE playlistId = :playlistId AND categoryId = :categoryId")
+    suspend fun setAllChannelsHidden(playlistId: String, categoryId: String, isHidden: Boolean)
+
+    @Query("UPDATE channels SET sortOrder = :sortOrder WHERE id = :channelId")
+    suspend fun updateChannelSortOrder(channelId: String, sortOrder: Int)
+
+    @Query("UPDATE channels SET sortOrder = channelNumber, isHidden = 0 WHERE playlistId = :playlistId AND categoryId = :categoryId")
+    suspend fun resetChannelSortOrder(playlistId: String, categoryId: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChannels(channels: List<ChannelEntity>)
 
     @Query("UPDATE channels SET isFavorite = :isFavorite WHERE id = :channelId")
     suspend fun updateFavorite(channelId: String, isFavorite: Boolean)
+
+    @Query("SELECT COUNT(*) FROM channels WHERE playlistId = :playlistId")
+    suspend fun getChannelCount(playlistId: String): Int
 
     @Query("DELETE FROM channels WHERE playlistId = :playlistId")
     suspend fun deleteChannelsForPlaylist(playlistId: String)
@@ -80,6 +101,21 @@ interface CategoryDao {
 
     @Query("SELECT * FROM categories WHERE playlistId = :playlistId AND isHidden = 0 ORDER BY sortOrder ASC, name ASC")
     fun observeCategories(playlistId: String): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM categories WHERE playlistId = :playlistId AND type = :type ORDER BY sortOrder ASC, name ASC")
+    fun getAllCategoriesForManagement(playlistId: String, type: String): Flow<List<CategoryEntity>>
+
+    @Query("UPDATE categories SET isHidden = :isHidden WHERE id = :categoryId")
+    suspend fun updateCategoryHidden(categoryId: String, isHidden: Boolean)
+
+    @Query("UPDATE categories SET isHidden = :isHidden WHERE playlistId = :playlistId AND type = :type")
+    suspend fun setAllCategoriesHidden(playlistId: String, type: String, isHidden: Boolean)
+
+    @Query("UPDATE categories SET sortOrder = :sortOrder WHERE id = :categoryId")
+    suspend fun updateCategorySortOrder(categoryId: String, sortOrder: Int)
+
+    @Query("UPDATE categories SET sortOrder = 0, isHidden = 0 WHERE playlistId = :playlistId AND type = :type")
+    suspend fun resetCategorySortOrder(playlistId: String, type: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCategories(categories: List<CategoryEntity>)
@@ -101,6 +137,15 @@ interface EpgDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEpgListings(listings: List<EpgListingEntity>)
+
+    @Query("SELECT * FROM epg_listings WHERE channelTvgId IN (:tvgIds) AND endTime > :now AND startTime < :horizonEnd ORDER BY channelTvgId ASC, startTime ASC")
+    fun observeProgramsForChannels(tvgIds: List<String>, now: Long, horizonEnd: Long): Flow<List<EpgListingEntity>>
+
+    @Query("SELECT * FROM epg_listings WHERE channelTvgId IN (:tvgIds) AND endTime > :now AND startTime < :horizonEnd ORDER BY channelTvgId ASC, startTime ASC")
+    suspend fun getProgramsForChannels(tvgIds: List<String>, now: Long, horizonEnd: Long): List<EpgListingEntity>
+
+    @Query("SELECT COUNT(*) FROM epg_listings")
+    suspend fun getCount(): Int
 
     @Query("DELETE FROM epg_listings WHERE endTime < :cutoff")
     suspend fun purgeOldListings(cutoff: Long)
@@ -135,16 +180,16 @@ interface VodDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEpisodes(episodes: List<EpisodeEntity>)
 
-    @Query("SELECT * FROM movies WHERE playlistId = :playlistId ORDER BY name ASC LIMIT :limit")
+    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) ORDER BY name ASC LIMIT :limit")
     fun getMovies(playlistId: String, limit: Int = 100): Flow<List<MovieEntity>>
 
-    @Query("SELECT * FROM series WHERE playlistId = :playlistId ORDER BY name ASC LIMIT :limit")
+    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) ORDER BY name ASC LIMIT :limit")
     fun getSeries(playlistId: String, limit: Int = 100): Flow<List<SeriesEntity>>
 
-    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
+    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
     fun getFeaturedMovies(playlistId: String, limit: Int = 12): Flow<List<MovieEntity>>
 
-    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
+    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
     fun getFeaturedSeries(playlistId: String, limit: Int = 12): Flow<List<SeriesEntity>>
 
     @Query("SELECT * FROM series WHERE playlistId = :playlistId AND isFavorite = 1")
@@ -156,16 +201,22 @@ interface VodDao {
     @Query("UPDATE series SET backdropUrl = :backdropUrl, plot = CASE WHEN :plot != '' THEN :plot ELSE plot END, rating = CASE WHEN :rating > 0 THEN :rating ELSE rating END WHERE id = :id")
     suspend fun updateSeriesEnrichment(id: String, backdropUrl: String, plot: String, rating: Float)
 
+    @Query("UPDATE movies SET isFavorite = :isFavorite WHERE id = :movieId")
+    suspend fun updateMovieFavorite(movieId: String, isFavorite: Boolean)
+
+    @Query("UPDATE series SET isFavorite = :isFavorite WHERE id = :seriesId")
+    suspend fun updateSeriesFavorite(seriesId: String, isFavorite: Boolean)
+
     @Query("SELECT COUNT(*) FROM movies WHERE playlistId = :playlistId")
     suspend fun getMovieCount(playlistId: String): Int
 
     @Query("SELECT COUNT(*) FROM series WHERE playlistId = :playlistId")
     suspend fun getSeriesCount(playlistId: String): Int
 
-    @Query("SELECT * FROM movies WHERE (playlistId = :playlistId OR :playlistId = '') AND name LIKE '%' || :query || '%' LIMIT 50")
+    @Query("SELECT * FROM movies WHERE (playlistId = :playlistId OR :playlistId = '') AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND name LIKE '%' || :query || '%' LIMIT 50")
     suspend fun searchMovies(playlistId: String, query: String): List<MovieEntity>
 
-    @Query("SELECT * FROM series WHERE (playlistId = :playlistId OR :playlistId = '') AND name LIKE '%' || :query || '%' LIMIT 50")
+    @Query("SELECT * FROM series WHERE (playlistId = :playlistId OR :playlistId = '') AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND name LIKE '%' || :query || '%' LIMIT 50")
     suspend fun searchSeries(playlistId: String, query: String): List<SeriesEntity>
 }
 
@@ -185,6 +236,12 @@ interface WatchProgressDao {
 
     @Query("DELETE FROM watch_progress WHERE profileId = :profileId")
     suspend fun clearAllProgressForProfile(profileId: String)
+
+    @Query("DELETE FROM watch_progress WHERE profileId = :profileId AND contentType = 'channel'")
+    suspend fun clearRecentlyWatchedChannels(profileId: String)
+
+    @Query("DELETE FROM watch_progress")
+    suspend fun clearAllWatchProgress()
 }
 
 @Dao
