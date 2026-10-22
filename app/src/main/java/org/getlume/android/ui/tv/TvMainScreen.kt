@@ -14,6 +14,7 @@ import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.designsystem.*
 import org.getlume.android.core.player.PlayableMedia
 import org.getlume.android.core.sync.PlaylistSyncManager
+import org.getlume.android.core.settings.AppSettings
 import org.getlume.android.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,9 +33,28 @@ fun TvMainScreen(
     channelLineup: List<ChannelEntity> = emptyList(),
     onOpenMultiView: () -> Unit
 ) {
+    val settings = remember { AppSettings.get() }
+    val revision by settings.revision.collectAsState()
+    val db = remember { org.getlume.android.LumeApp.instance.database }
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+    val playlistId = activePlaylist?.id ?: ""
     var selectedScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var showAddPlaylistModal by remember { mutableStateOf(false) }
     var isTopBarFocused by remember { mutableStateOf(false) }
+
+    // If currently selected screen is hidden via Library settings, fall back to Home
+    LaunchedEffect(revision, selectedScreen, playlistId) {
+        val isHidden = when (selectedScreen) {
+            Screen.Movies -> !settings.isPlaylistTabVisible(playlistId, "movies")
+            Screen.Series -> !settings.isPlaylistTabVisible(playlistId, "series")
+            Screen.LiveTv -> !settings.isPlaylistTabVisible(playlistId, "livetv")
+            Screen.Sports -> !settings.libraryShowSports || !settings.sportsHubEnabled
+            else -> false
+        }
+        if (isHidden) {
+            selectedScreen = Screen.Home
+        }
+    }
 
     // Authentic Apple TV Auto-Sync gate:
     // On app startup, checks if the active playlist is due for an automatic refresh
@@ -140,6 +160,9 @@ fun TvMainScreen(
                         onMoveUpToTopBar = {
                             isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
+                        },
+                        onStartMultiView = { channel ->
+                            onOpenMultiView()
                         }
                     )
                 }
