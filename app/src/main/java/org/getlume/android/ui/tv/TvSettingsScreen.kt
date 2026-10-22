@@ -1,8 +1,12 @@
 package org.getlume.android.ui.tv
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.platform.LocalContext
+import java.io.File
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -21,6 +25,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.input.key.*
@@ -100,7 +105,7 @@ sealed class SettingsDrillIn {
     data class PlaylistDetail(val playlist: PlaylistEntity) : SettingsDrillIn()
     data class EditProfile(val profile: UserProfileEntity?) : SettingsDrillIn()
     object ContentManagement : SettingsDrillIn()
-    data class ChannelManagement(val categoryName: String) : SettingsDrillIn()
+    data class ChannelManagement(val categoryId: String, val categoryName: String) : SettingsDrillIn()
     object FavoriteManagement : SettingsDrillIn()
     object SubtitleStyle : SettingsDrillIn()
     object OpenSubtitles : SettingsDrillIn()
@@ -170,14 +175,19 @@ fun TvSettingsScreen(
             horizontalArrangement = Arrangement.spacedBy(44.dp)
         ) {
             // LEFT COLUMN: TV SIDEBAR RAIL (270dp)
-            Box(modifier = Modifier.onFocusChanged { if (it.hasFocus) isInContentPane = false }) {
+            Box(
+                modifier = Modifier
+                    .focusProperties { canFocus = drillInStack.isEmpty() }
+                    .onFocusChanged { if (it.hasFocus) isInContentPane = false }
+            ) {
                 TvSidebarRail(
                     selectedCategory = selectedCategory,
                     firstItemFocusRequester = firstItemFocusRequester,
                     onMoveUpToTopBar = onMoveUpToTopBar,
                     onSelectCategory = { cat ->
-                        selectedCategory = cat
-                        drillInStack.clear()
+                        if (drillInStack.isEmpty()) {
+                            selectedCategory = cat
+                        }
                     }
                 )
             }
@@ -217,8 +227,8 @@ fun TvSettingsScreen(
                     }
                     is SettingsDrillIn.ContentManagement -> {
                         TvContentManagementPane(
-                            onOpenChannelManagement = { catName ->
-                                drillInStack.add(SettingsDrillIn.ChannelManagement(catName))
+                            onOpenChannelManagement = { catId, catName ->
+                                drillInStack.add(SettingsDrillIn.ChannelManagement(catId, catName))
                             },
                             onOpenFavorites = {
                                 drillInStack.add(SettingsDrillIn.FavoriteManagement)
@@ -228,6 +238,7 @@ fun TvSettingsScreen(
                     }
                     is SettingsDrillIn.ChannelManagement -> {
                         TvChannelManagementPane(
+                            categoryId = drillIn.categoryId,
                             categoryName = drillIn.categoryName,
                             onBack = popDrillIn
                         )
@@ -1671,13 +1682,25 @@ private fun TvPlaylistDetailPane(
     val syncProgressMessage by PlaylistSyncManager.syncProgressMessage.collectAsState()
     val isThisPlaylistSyncing = isSyncing && syncingPlaylistId == currentPlaylist.id
 
+    val backFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
+        delay(60)
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(36.dp)
     ) {
-        TvDrillInHeader(backLabel = "Playlists", title = currentPlaylist.name, onBack = onBack)
+        TvDrillInHeader(
+            backLabel = "Playlists",
+            title = currentPlaylist.name,
+            focusRequester = backFocusRequester,
+            onBack = onBack
+        )
 
         // Details Section
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1821,11 +1844,21 @@ private fun TvPlaylistDetailPane(
 // ==========================================
 @Composable
 private fun TvEpgSettingsPane() {
-    var epgIntervalIndex by remember { mutableStateOf(1) } // default: Every Day
-    val intervals = listOf("Every 6 Hours", "Every Day", "Every 3 Days", "Every Week")
+    val settings = remember { AppSettings.get() }
+    val scope = rememberCoroutineScope()
+    val db = LumeApp.instance.database
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+    val isSyncing by org.getlume.android.core.sync.EpgSyncManager.isSyncing.collectAsState()
+    val syncMsg by org.getlume.android.core.sync.EpgSyncManager.syncMessage.collectAsState()
+    var currentInterval by remember { mutableStateOf(settings.syncInterval) }
     var isAddingSource by remember { mutableStateOf(false) }
-    var customSourceName by remember { mutableStateOf("") }
-    var customSourceUrl by remember { mutableStateOf("") }
+    var customSourceUrl by remember { mutableStateOf(settings.customEpgUrl) }
+
+    val lastSyncText = if (settings.epgLastSyncDate > 0) {
+        android.text.format.DateUtils.getRelativeTimeSpanString(settings.epgLastSyncDate).toString()
+    } else {
+        "Never"
+    }
 
     Column(
         modifier = Modifier
@@ -1838,12 +1871,27 @@ private fun TvEpgSettingsPane() {
             TvSettingsSectionLabel("EPG Sources")
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                TvSettingsRow(
-                    title = "Primary XMLTV Guide",
-                    value = "On",
-                    onClick = { /* toggle */ }
+                TvSettingsValueRow(
+                    title = activePlaylist?.let { "${it.name} Guide" } ?: "Primary XMLTV Guide",
+                    value = if (activePlaylist?.epgUrl.isNullOrBlank()) "From playlist" else "Configured"
                 )
+                if (settings.customEpgUrl.isNotBlank()) {
+                    TvSettingsRow(
+                        title = "Custom XMLTV Feed",
+                        value = "Remove",
+                        isDestructive = true,
+                        onClick = {
+                            settings.customEpgUrl = ""
+                            customSourceUrl = ""
+                        }
+                    )
+                }
             }
+            TvSettingsFooter(
+                activePlaylist?.epgUrl?.takeIf { it.isNotBlank() }
+                    ?: settings.customEpgUrl.takeIf { it.isNotBlank() }
+                    ?: "No XMLTV guide URL attached to the active playlist. Add a custom source below."
+            )
         }
 
         // Section: Add Custom Source
@@ -1852,14 +1900,16 @@ private fun TvEpgSettingsPane() {
 
             if (isAddingSource) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TvSettingsTextInput("Source Name", customSourceName, "Name") { customSourceName = it }
                     TvSettingsTextInput("XMLTV URL", customSourceUrl, "http://example.com/epg.xml") { customSourceUrl = it }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         TvSettingsActionButton(
-                            title = "Add Source",
+                            title = "Save Source",
                             prominent = true,
-                            onClick = { isAddingSource = false }
+                            onClick = {
+                                settings.customEpgUrl = customSourceUrl.trim()
+                                isAddingSource = false
+                            }
                         )
                         TvSettingsActionButton(
                             title = "Cancel",
@@ -1880,16 +1930,24 @@ private fun TvEpgSettingsPane() {
             TvSettingsSectionLabel("Automatic Refresh")
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                intervals.forEachIndexed { index, label ->
+                SyncInterval.values().forEach { interval ->
                     TvSettingsRow(
-                        title = label,
-                        trailingCheckmark = epgIntervalIndex == index,
-                        onClick = { epgIntervalIndex = index }
+                        title = interval.title,
+                        trailingCheckmark = currentInterval == interval,
+                        onClick = {
+                            currentInterval = interval
+                            settings.syncInterval = interval
+                        }
                     )
                 }
                 TvSettingsRow(
-                    title = "Sync Now",
-                    onClick = { /* trigger epg sync */ }
+                    title = if (isSyncing) "Syncing Guide…" else "Sync Now",
+                    value = if (isSyncing) (syncMsg ?: "Downloading") else "Last: $lastSyncText",
+                    onClick = {
+                        scope.launch {
+                            org.getlume.android.core.sync.EpgSyncManager.syncNow(playlist = activePlaylist)
+                        }
+                    }
                 )
             }
 
@@ -1906,11 +1964,28 @@ private fun TvLibrarySettingsPane(
     onOpenContentManagement: () -> Unit
 ) {
     val settings = remember { AppSettings.get() }
-    var showMovies by remember { mutableStateOf(settings.libraryShowMovies) }
-    var showSeries by remember { mutableStateOf(settings.libraryShowSeries) }
-    var showLiveTv by remember { mutableStateOf(settings.libraryShowLiveTV) }
-    var showSports by remember { mutableStateOf(settings.libraryShowSports) }
-    var searchAll by remember { mutableStateOf(settings.searchAllPlaylists) }
+    val revision by settings.revision.collectAsState()
+    val db = remember { LumeApp.instance.database }
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+
+    var showMovies by remember(revision, activePlaylist?.id) {
+        mutableStateOf(activePlaylist?.let { settings.isPlaylistTabVisible(it.id, "movies") } ?: settings.libraryShowMovies)
+    }
+    var showSeries by remember(revision, activePlaylist?.id) {
+        mutableStateOf(activePlaylist?.let { settings.isPlaylistTabVisible(it.id, "series") } ?: settings.libraryShowSeries)
+    }
+    var showLiveTv by remember(revision, activePlaylist?.id) {
+        mutableStateOf(activePlaylist?.let { settings.isPlaylistTabVisible(it.id, "livetv") } ?: settings.libraryShowLiveTV)
+    }
+    var showSports by remember(revision) { mutableStateOf(settings.libraryShowSports) }
+    var searchAll by remember(revision) { mutableStateOf(settings.searchAllPlaylists) }
+
+    val activePlaylistName = activePlaylist?.name
+    val tabsFooter = if (!activePlaylistName.isNullOrBlank()) {
+        "Movies, Series and Live TV apply to $activePlaylistName, your active playlist. Sports applies to every playlist."
+    } else {
+        "Movies, Series and Live TV apply to your active playlist. Sports applies to every playlist."
+    }
 
     Column(
         modifier = Modifier
@@ -1925,15 +2000,18 @@ private fun TvLibrarySettingsPane(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 TvOptionToggleRow("Movies", showMovies) {
                     showMovies = it
-                    settings.libraryShowMovies = it
+                    activePlaylist?.let { pl -> settings.setPlaylistTabVisible(pl.id, "movies", it) }
+                        ?: run { settings.libraryShowMovies = it }
                 }
                 TvOptionToggleRow("Series", showSeries) {
                     showSeries = it
-                    settings.libraryShowSeries = it
+                    activePlaylist?.let { pl -> settings.setPlaylistTabVisible(pl.id, "series", it) }
+                        ?: run { settings.libraryShowSeries = it }
                 }
                 TvOptionToggleRow("Live TV", showLiveTv) {
                     showLiveTv = it
-                    settings.libraryShowLiveTV = it
+                    activePlaylist?.let { pl -> settings.setPlaylistTabVisible(pl.id, "livetv", it) }
+                        ?: run { settings.libraryShowLiveTV = it }
                 }
                 TvOptionToggleRow("Sports", showSports) {
                     showSports = it
@@ -1941,7 +2019,7 @@ private fun TvLibrarySettingsPane(
                 }
             }
 
-            TvSettingsFooter("Movies, Series and Live TV apply to your active playlist. Sports applies to every playlist.")
+            TvSettingsFooter(tabsFooter)
         }
 
         // Section: Content
@@ -1951,6 +2029,7 @@ private fun TvLibrarySettingsPane(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 TvSettingsRow(
                     title = "Categories & Channels",
+                    value = activePlaylistName ?: "No Active Playlist",
                     trailingChevron = true,
                     onClick = onOpenContentManagement
                 )
@@ -1980,26 +2059,33 @@ private fun TvLibrarySettingsPane(
 // ==========================================
 @Composable
 private fun TvContentManagementPane(
-    onOpenChannelManagement: (String) -> Unit,
+    onOpenChannelManagement: (String, String) -> Unit,
     onOpenFavorites: () -> Unit,
     onBack: () -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf("Live TV") }
-    val tabs = listOf("Live TV", "Movies", "Series", "Favorites")
-    var categories by remember {
-        mutableStateOf(
-            listOf(
-                Pair("General Entertainment", true),
-                Pair("Sports & Events", true),
-                Pair("News & Business", true),
-                Pair("Documentary & Nature", true),
-                Pair("Movies & Cinema", true),
-                Pair("Kids & Family", true),
-                Pair("International Channels", false),
-                Pair("Music & Audio", true)
-            )
-        )
+    val backFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
+        delay(60)
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
     }
+
+    var selectedTab by remember { mutableStateOf("Live TV") }
+    val tabs = listOf("Live TV", "Movies", "Series")
+    val scope = rememberCoroutineScope()
+    val db = remember { LumeApp.instance.database }
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+
+    val categoryType = when (selectedTab) {
+        "Live TV" -> "live"
+        "Movies" -> "movie"
+        "Series" -> "series"
+        else -> "live"
+    }
+
+    val categories by db.categoryDao()
+        .getAllCategoriesForManagement(activePlaylist?.id ?: "", categoryType)
+        .collectAsState(initial = emptyList())
 
     Column(
         modifier = Modifier
@@ -2007,9 +2093,26 @@ private fun TvContentManagementPane(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(28.dp)
     ) {
-        TvDrillInHeader(backLabel = "Library", title = "Content Management", onBack = onBack)
+        TvDrillInHeader(
+            backLabel = "Library",
+            title = "Content Management",
+            focusRequester = backFocusRequester,
+            onBack = onBack
+        )
 
-        // Type Picker (Live TV, Movies, Series, Favorites)
+        // Favorites Entry (Matches Lume tvOS ContentManagementView Favorites link)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvSettingsRow(
+                title = "Favorites",
+                value = "Channels, Movies, Series",
+                leadingIcon = Icons.Default.Favorite,
+                trailingChevron = true,
+                onClick = onOpenFavorites
+            )
+            TvSettingsFooter("Reorder and manage all your favorite channels, movies, and series in one unified list.")
+        }
+
+        // Type Picker (Live TV, Movies, Series)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             tabs.forEach { tab ->
                 TvSettingsActionButton(
@@ -2020,94 +2123,101 @@ private fun TvContentManagementPane(
             }
         }
 
-        if (selectedTab == "Favorites") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TvSettingsSectionLabel("Favorites")
-                TvSettingsRow(
-                    title = "Manage Favorites",
-                    value = "Channels, Movies, Series",
-                    trailingChevron = true,
-                    onClick = onOpenFavorites
-                )
-                TvSettingsFooter("Reorder all your favorite channels, movies, and series in one unified list.")
-            }
-        } else {
-            // Bulk Actions
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                TvSettingsActionButton(
-                    title = "Show All",
-                    onClick = {
-                        categories = categories.map { it.copy(second = true) }
+        // Bulk Actions
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TvSettingsActionButton(
+                title = "Show All",
+                onClick = {
+                    activePlaylist?.let { pl ->
+                        scope.launch {
+                            db.categoryDao().setAllCategoriesHidden(pl.id, categoryType, false)
+                        }
                     }
-                )
-                TvSettingsActionButton(
-                    title = "Hide All",
-                    onClick = {
-                        categories = categories.map { it.copy(second = false) }
+                }
+            )
+            TvSettingsActionButton(
+                title = "Hide All",
+                onClick = {
+                    activePlaylist?.let { pl ->
+                        scope.launch {
+                            db.categoryDao().setAllCategoriesHidden(pl.id, categoryType, true)
+                        }
                     }
-                )
-                TvSettingsActionButton(
-                    title = "Reset Order",
-                    onClick = {
-                        categories = listOf(
-                            Pair("General Entertainment", true),
-                            Pair("Sports & Events", true),
-                            Pair("News & Business", true),
-                            Pair("Documentary & Nature", true),
-                            Pair("Movies & Cinema", true),
-                            Pair("Kids & Family", true),
-                            Pair("International Channels", false),
-                            Pair("Music & Audio", true)
-                        )
+                }
+            )
+            TvSettingsActionButton(
+                title = "Reset Order",
+                onClick = {
+                    activePlaylist?.let { pl ->
+                        scope.launch {
+                            db.categoryDao().resetCategorySortOrder(pl.id, categoryType)
+                        }
                     }
-                )
-            }
+                }
+            )
+        }
 
-            // Categories List
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TvSettingsSectionLabel("Categories")
+        // Categories List
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val headerTitle = if (activePlaylist != null) {
+                "Categories (${categories.size}) — ${activePlaylist?.name}"
+            } else {
+                "Categories"
+            }
+            TvSettingsSectionLabel(headerTitle)
 
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (activePlaylist == null) {
+                TvSettingsValueRow("No Playlist", "Select an active playlist in Settings > Playlists first.")
+            } else if (categories.isEmpty()) {
+                TvSettingsValueRow("Categories", "No categories found for $selectedTab. Sync this playlist first.")
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     categories.forEachIndexed { index, cat ->
                         TvContentManagementRow(
-                            title = cat.first,
-                            isEnabled = cat.second,
+                            title = cat.name,
+                            isEnabled = !cat.isHidden,
                             isFirst = index == 0,
                             isLast = index == categories.size - 1,
                             showChannelsButton = selectedTab == "Live TV",
                             onToggle = {
-                                categories = categories.toMutableList().also {
-                                    it[index] = it[index].copy(second = !cat.second)
+                                scope.launch {
+                                    db.categoryDao().updateCategoryHidden(cat.id, !cat.isHidden)
                                 }
                             },
                             onMoveUp = {
                                 if (index > 0) {
-                                    val list = categories.toMutableList()
-                                    val temp = list[index]
-                                    list[index] = list[index - 1]
-                                    list[index - 1] = temp
-                                    categories = list
+                                    scope.launch {
+                                        val reordered = categories.toMutableList()
+                                        val item = reordered.removeAt(index)
+                                        reordered.add(index - 1, item)
+                                        reordered.forEachIndexed { i, c ->
+                                            db.categoryDao().updateCategorySortOrder(c.id, i)
+                                        }
+                                    }
                                 }
                             },
                             onMoveDown = {
                                 if (index < categories.size - 1) {
-                                    val list = categories.toMutableList()
-                                    val temp = list[index]
-                                    list[index] = list[index + 1]
-                                    list[index + 1] = temp
-                                    categories = list
+                                    scope.launch {
+                                        val reordered = categories.toMutableList()
+                                        val item = reordered.removeAt(index)
+                                        reordered.add(index + 1, item)
+                                        reordered.forEachIndexed { i, c ->
+                                            db.categoryDao().updateCategorySortOrder(c.id, i)
+                                        }
+                                    }
                                 }
                             },
-                            onOpenChannels = { onOpenChannelManagement(cat.first) }
+                            onOpenChannels = { onOpenChannelManagement(cat.id, cat.name) }
                         )
                     }
                 }
-
-                TvSettingsFooter(
-                    if (selectedTab == "Live TV") "Hide categories to remove them from Live TV, or tap Channels to manage individual streams."
-                    else "Hide categories to remove them from $selectedTab."
-                )
             }
+
+            TvSettingsFooter(
+                if (selectedTab == "Live TV") "Press Select on a category to show/hide. Use Channels to manage individual streams, or arrows to reorder."
+                else "Press Select on a category to show/hide, or arrows to reorder."
+            )
         }
     }
 }
@@ -2124,60 +2234,95 @@ private fun TvContentManagementRow(
     onMoveDown: () -> Unit,
     onOpenChannels: () -> Unit
 ) {
-    Box(
+    val rowInteractionSource = remember { MutableInteractionSource() }
+    val isRowFocused by rowInteractionSource.collectIsFocusedAsState()
+
+    val upInteractionSource = remember { MutableInteractionSource() }
+    val isUpFocused by upInteractionSource.collectIsFocusedAsState()
+
+    val downInteractionSource = remember { MutableInteractionSource() }
+    val isDownFocused by downInteractionSource.collectIsFocusedAsState()
+
+    val isAnyFocused = isRowFocused || isUpFocused || isDownFocused
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
-            .background(Color.White.copy(alpha = 0.05f))
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        contentAlignment = Alignment.CenterStart
+            .background(if (isAnyFocused) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.04f))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        // Left category card (clickable on DPAD_CENTER to toggle visibility)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isRowFocused) Color.White.copy(alpha = 0.95f) else Color.Transparent)
+                .clickable(
+                    interactionSource = rowInteractionSource,
+                    indication = null,
+                    onClick = onToggle
+                )
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                TvMiniIconButton(
-                    icon = if (isEnabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                    tint = if (isEnabled) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.35f),
-                    onClick = onToggle
+                Icon(
+                    imageVector = if (isEnabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                    contentDescription = null,
+                    tint = if (isRowFocused) (if (isEnabled) Color(0xFF1565C0) else Color.Black.copy(alpha = 0.45f))
+                           else (if (isEnabled) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.35f)),
+                    modifier = Modifier.size(20.dp)
                 )
 
                 Text(
                     text = title,
-                    color = if (isEnabled) Color.White else Color.White.copy(alpha = 0.45f),
+                    color = if (isRowFocused) Color.Black else if (isEnabled) Color.White else Color.White.copy(alpha = 0.45f),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Medium
                 )
-            }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (showChannelsButton) {
-                    TvSettingsActionButton(
-                        title = "Channels",
-                        icon = Icons.Default.ChevronRight,
-                        onClick = onOpenChannels
+                if (!isEnabled) {
+                    Text(
+                        text = "(Hidden)",
+                        color = if (isRowFocused) Color.Black.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.55f),
+                        fontSize = 13.sp
                     )
                 }
+            }
+        }
 
-                TvMiniIconButton(
-                    icon = Icons.Default.KeyboardArrowUp,
-                    enabled = !isFirst,
-                    onClick = onMoveUp
-                )
-                TvMiniIconButton(
-                    icon = Icons.Default.KeyboardArrowDown,
-                    enabled = !isLast,
-                    onClick = onMoveDown
+        // Action buttons reachable via DPAD_RIGHT
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(start = 8.dp)
+        ) {
+            if (showChannelsButton) {
+                TvSettingsActionButton(
+                    title = "Channels",
+                    icon = Icons.Default.ChevronRight,
+                    onClick = onOpenChannels
                 )
             }
+
+            TvMiniIconButton(
+                icon = Icons.Default.KeyboardArrowUp,
+                enabled = !isFirst,
+                interactionSource = upInteractionSource,
+                onClick = onMoveUp
+            )
+            TvMiniIconButton(
+                icon = Icons.Default.KeyboardArrowDown,
+                enabled = !isLast,
+                interactionSource = downInteractionSource,
+                onClick = onMoveDown
+            )
         }
     }
 }
@@ -2187,24 +2332,23 @@ private fun TvContentManagementRow(
 // ==========================================
 @Composable
 private fun TvChannelManagementPane(
+    categoryId: String,
     categoryName: String,
     onBack: () -> Unit
 ) {
-    var channels by remember {
-        mutableStateOf(
-            listOf(
-                Pair("BBC One HD", true),
-                Pair("BBC Two HD", true),
-                Pair("ITV 1 HD", true),
-                Pair("Channel 4 HD", true),
-                Pair("Channel 5 HD", true),
-                Pair("Sky Sports Main Event HD", true),
-                Pair("Sky Sports Premier League HD", true),
-                Pair("TNT Sports 1 HD", true),
-                Pair("EuroSport 1 HD", false)
-            )
-        )
+    val backFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
+        delay(60)
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
     }
+
+    val scope = rememberCoroutineScope()
+    val db = remember { LumeApp.instance.database }
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+    val channels by db.channelDao()
+        .getChannelsForManagement(activePlaylist?.id ?: "", categoryId)
+        .collectAsState(initial = emptyList())
 
     Column(
         modifier = Modifier
@@ -2212,71 +2356,92 @@ private fun TvChannelManagementPane(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(28.dp)
     ) {
-        TvDrillInHeader(backLabel = "Categories", title = categoryName, onBack = onBack)
+        TvDrillInHeader(
+            backLabel = "Categories",
+            title = categoryName,
+            focusRequester = backFocusRequester,
+            onBack = onBack
+        )
 
         // Bulk Actions
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             TvSettingsActionButton(
                 title = "Show All",
-                onClick = { channels = channels.map { it.copy(second = true) } }
+                onClick = {
+                    activePlaylist?.let { pl ->
+                        scope.launch {
+                            db.channelDao().setAllChannelsHidden(pl.id, categoryId, false)
+                        }
+                    }
+                }
             )
             TvSettingsActionButton(
                 title = "Hide All",
-                onClick = { channels = channels.map { it.copy(second = false) } }
+                onClick = {
+                    activePlaylist?.let { pl ->
+                        scope.launch {
+                            db.channelDao().setAllChannelsHidden(pl.id, categoryId, true)
+                        }
+                    }
+                }
             )
             TvSettingsActionButton(
                 title = "Reset Order",
                 onClick = {
-                    channels = listOf(
-                        Pair("BBC One HD", true),
-                        Pair("BBC Two HD", true),
-                        Pair("ITV 1 HD", true),
-                        Pair("Channel 4 HD", true),
-                        Pair("Channel 5 HD", true),
-                        Pair("Sky Sports Main Event HD", true),
-                        Pair("Sky Sports Premier League HD", true),
-                        Pair("TNT Sports 1 HD", true),
-                        Pair("EuroSport 1 HD", false)
-                    )
+                    activePlaylist?.let { pl ->
+                        scope.launch {
+                            db.channelDao().resetChannelSortOrder(pl.id, categoryId)
+                        }
+                    }
                 }
             )
         }
 
         // Channels List
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvSettingsSectionLabel("Channels")
+            TvSettingsSectionLabel("Channels (${channels.size})")
 
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                channels.forEachIndexed { index, channel ->
-                    TvSettingsReorderRow(
-                        title = channel.first,
-                        isEnabled = channel.second,
-                        isFirst = index == 0,
-                        isLast = index == channels.size - 1,
-                        onToggle = {
-                            channels = channels.toMutableList().also {
-                                it[index] = it[index].copy(second = !channel.second)
+            if (channels.isEmpty()) {
+                TvSettingsValueRow("Channels", "No channels found in this category.")
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    channels.forEachIndexed { index, channel ->
+                        TvSettingsReorderRow(
+                            title = channel.name,
+                            isEnabled = !channel.isHidden,
+                            isFirst = index == 0,
+                            isLast = index == channels.size - 1,
+                            onToggle = {
+                                scope.launch {
+                                    db.channelDao().updateChannelHidden(channel.id, !channel.isHidden)
+                                }
+                            },
+                            onMoveUp = {
+                                if (index > 0) {
+                                    scope.launch {
+                                        val reordered = channels.toMutableList()
+                                        val item = reordered.removeAt(index)
+                                        reordered.add(index - 1, item)
+                                        reordered.forEachIndexed { i, c ->
+                                            db.channelDao().updateChannelSortOrder(c.id, i)
+                                        }
+                                    }
+                                }
+                            },
+                            onMoveDown = {
+                                if (index < channels.size - 1) {
+                                    scope.launch {
+                                        val reordered = channels.toMutableList()
+                                        val item = reordered.removeAt(index)
+                                        reordered.add(index + 1, item)
+                                        reordered.forEachIndexed { i, c ->
+                                            db.channelDao().updateChannelSortOrder(c.id, i)
+                                        }
+                                    }
+                                }
                             }
-                        },
-                        onMoveUp = {
-                            if (index > 0) {
-                                val list = channels.toMutableList()
-                                val temp = list[index]
-                                list[index] = list[index - 1]
-                                list[index - 1] = temp
-                                channels = list
-                            }
-                        },
-                        onMoveDown = {
-                            if (index < channels.size - 1) {
-                                val list = channels.toMutableList()
-                                val temp = list[index]
-                                list[index] = list[index + 1]
-                                list[index + 1] = temp
-                                channels = list
-                            }
-                        }
-                    )
+                        )
+                    }
                 }
             }
 
@@ -2288,21 +2453,38 @@ private fun TvChannelManagementPane(
 // ==========================================
 // DRILL-IN: FAVORITES MANAGEMENT (FavoriteManagementView.swift)
 // ==========================================
+data class TvFavoriteItem(
+    val id: String,
+    val title: String,
+    val type: String, // "Live TV", "Movie", "Series"
+    val originalOrder: Int
+)
+
 @Composable
 private fun TvFavoriteManagementPane(
     onBack: () -> Unit
 ) {
-    var favorites by remember {
-        mutableStateOf(
-            listOf(
-                Triple("Sky Sports Premier League HD", "Live TV", true),
-                Triple("Inception (2010)", "Movie", true),
-                Triple("Breaking Bad", "Series", true),
-                Triple("BBC One HD", "Live TV", true),
-                Triple("Interstellar (2014)", "Movie", true),
-                Triple("Planet Earth III", "Series", true)
-            )
-        )
+    val backFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
+        delay(60)
+        try { backFocusRequester.requestFocus() } catch (_: Exception) {}
+    }
+
+    val scope = rememberCoroutineScope()
+    val db = remember { LumeApp.instance.database }
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+
+    val favChannels by db.channelDao().getFavoriteChannels(activePlaylist?.id ?: "").collectAsState(initial = emptyList())
+    val favMovies by db.vodDao().getFavoriteMovies(activePlaylist?.id ?: "").collectAsState(initial = emptyList())
+    val favSeries by db.vodDao().getFavoriteSeries(activePlaylist?.id ?: "").collectAsState(initial = emptyList())
+
+    val allFavorites = remember(favChannels, favMovies, favSeries) {
+        val list = mutableListOf<TvFavoriteItem>()
+        favChannels.forEach { list.add(TvFavoriteItem(it.id, it.name, "Live TV", it.sortOrder)) }
+        favMovies.forEach { list.add(TvFavoriteItem(it.id, it.name, "Movie", 0)) }
+        favSeries.forEach { list.add(TvFavoriteItem(it.id, it.name, "Series", 0)) }
+        list
     }
 
     Column(
@@ -2311,99 +2493,98 @@ private fun TvFavoriteManagementPane(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(28.dp)
     ) {
-        TvDrillInHeader(backLabel = "Content Management", title = "Favorites", onBack = onBack)
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TvSettingsActionButton(
-                title = "Reset Order",
-                onClick = {
-                    favorites = listOf(
-                        Triple("Sky Sports Premier League HD", "Live TV", true),
-                        Triple("Inception (2010)", "Movie", true),
-                        Triple("Breaking Bad", "Series", true),
-                        Triple("BBC One HD", "Live TV", true),
-                        Triple("Interstellar (2014)", "Movie", true),
-                        Triple("Planet Earth III", "Series", true)
-                    )
-                }
-            )
-        }
+        TvDrillInHeader(
+            backLabel = "Content Management",
+            title = "Favorites",
+            focusRequester = backFocusRequester,
+            onBack = onBack
+        )
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvSettingsSectionLabel("All Favorites")
+            TvSettingsSectionLabel("All Favorites (${allFavorites.size})")
 
-            if (favorites.isEmpty()) {
-                TvSettingsValueRow("Favorites", "No favorites yet. Mark channels, movies, or series as favorites to manage their order here.")
+            if (allFavorites.isEmpty()) {
+                TvSettingsValueRow("Favorites", "No favorites yet. Mark channels, movies, or series as favorites to manage them here.")
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    favorites.forEachIndexed { index, fav ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
-                                .background(Color.White.copy(alpha = 0.05f))
-                                .padding(horizontal = 16.dp, vertical = 10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                                ) {
-                                    TvMiniIconButton(
-                                        icon = Icons.Default.Favorite,
-                                        tint = Color(0xFFFF5252),
-                                        onClick = {
-                                            favorites = favorites.toMutableList().also { it.removeAt(index) }
-                                        }
-                                    )
-                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text(fav.first, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                                        Text(fav.second, color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    allFavorites.forEach { fav ->
+                        TvFavoriteItemRow(
+                            title = fav.title,
+                            type = fav.type,
+                            onRemove = {
+                                scope.launch {
+                                    when (fav.type) {
+                                        "Live TV" -> db.channelDao().updateFavorite(fav.id, false)
+                                        "Movie" -> db.vodDao().updateMovieFavorite(fav.id, false)
+                                        "Series" -> db.vodDao().updateSeriesFavorite(fav.id, false)
                                     }
                                 }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    TvMiniIconButton(
-                                        icon = Icons.Default.KeyboardArrowUp,
-                                        enabled = index > 0,
-                                        onClick = {
-                                            if (index > 0) {
-                                                val list = favorites.toMutableList()
-                                                val temp = list[index]
-                                                list[index] = list[index - 1]
-                                                list[index - 1] = temp
-                                                favorites = list
-                                            }
-                                        }
-                                    )
-                                    TvMiniIconButton(
-                                        icon = Icons.Default.KeyboardArrowDown,
-                                        enabled = index < favorites.size - 1,
-                                        onClick = {
-                                            if (index < favorites.size - 1) {
-                                                val list = favorites.toMutableList()
-                                                val temp = list[index]
-                                                list[index] = list[index + 1]
-                                                list[index + 1] = temp
-                                                favorites = list
-                                            }
-                                        }
-                                    )
-                                }
                             }
-                        }
+                        )
                     }
                 }
             }
 
-            TvSettingsFooter("Drag or reorder your favorites across channels, movies, and series. Tap the heart to remove an item.")
+            TvSettingsFooter("All your favorited channels, movies, and series. Press Select on an item to remove it from Favorites.")
+        }
+    }
+}
+
+@Composable
+private fun TvFavoriteItemRow(
+    title: String,
+    type: String,
+    onRemove: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
+            .background(if (isFocused) Color.White.copy(alpha = 0.95f) else Color.White.copy(alpha = 0.05f))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onRemove
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Favorite,
+                    contentDescription = null,
+                    tint = Color(0xFFFF5252),
+                    modifier = Modifier.size(22.dp)
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = title,
+                        color = if (isFocused) Color.Black else Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = type,
+                        color = if (isFocused) Color.Black.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.5f),
+                        fontSize = 13.sp
+                    )
+                }
+            }
+            Text(
+                text = "Remove",
+                color = if (isFocused) Color.Black.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.45f),
+                fontSize = 14.sp
+            )
         }
     }
 }
@@ -2411,29 +2592,50 @@ private fun TvFavoriteManagementPane(
 // ==========================================
 // PANE 6: HOME (SettingsView+TVHome.swift)
 // ==========================================
+data class TvHomeSectionItem(val key: String, val title: String, val isPro: Boolean = false)
+
 @Composable
 private fun TvHomeLayoutSettingsPane() {
     val settings = remember { AppSettings.get() }
-    var sections by remember {
-        mutableStateOf(
-            listOf(
-                Triple("Recently Watched", true, false),
-                Triple("Favorites", true, false),
-                Triple("For You", true, true), // Pro
-                Triple("Trending Movies", true, false),
-                Triple("Trending Series", true, false),
-                Triple("Trakt Watchlist", true, false),
-                Triple("Simkl Watchlist", true, false),
-                Triple("Sports", true, true)  // Pro
-            )
+
+    val canonicalSections = remember {
+        listOf(
+            TvHomeSectionItem("recentlyWatched", "Recently Watched"),
+            TvHomeSectionItem("favorites", "Favorites"),
+            TvHomeSectionItem("forYou", "For You", isPro = true),
+            TvHomeSectionItem("trendingMovies", "Trending Movies"),
+            TvHomeSectionItem("trendingSeries", "Trending Series"),
+            TvHomeSectionItem("traktWatchlist", "Trakt Watchlist"),
+            TvHomeSectionItem("simklWatchlist", "Simkl Watchlist"),
+            TvHomeSectionItem("sports", "Sports", isPro = true)
         )
     }
+
+    val orderedSections = remember(settings.homeSectionOrder) {
+        val orderKeys = settings.homeSectionOrder.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val map = canonicalSections.associateBy { it.key }
+        val result = mutableListOf<TvHomeSectionItem>()
+        val seen = mutableSetOf<String>()
+        orderKeys.forEach { key ->
+            map[key]?.let {
+                result.add(it)
+                seen.add(key)
+            }
+        }
+        canonicalSections.forEach { if (!seen.contains(it.key)) result.add(it) }
+        result
+    }
+
+    var sections by remember { mutableStateOf(orderedSections) }
+    var disabledKeys by remember { mutableStateOf(settings.homeDisabledSections) }
     var includeLiveTv by remember { mutableStateOf(settings.homeRecentlyWatchedIncludesLiveTV) }
     var androidTvChannels by remember { mutableStateOf(settings.androidTvChannelsEnabled) }
-    var homeStyleIndex by remember { mutableStateOf(0) }
     val homeStyles = listOf("Rows", "Carousel")
-    var itemsPerSectionIndex by remember { mutableStateOf(1) } // 10 items
-    val itemCounts = listOf("5", "10", "15", "20")
+    var homeStyleIndex by remember { mutableStateOf(if (settings.homeLayoutStyle == "Carousel") 1 else 0) }
+    val itemCounts = listOf(5, 10, 15, 20)
+    var itemsPerSectionIndex by remember {
+        mutableStateOf(itemCounts.indexOf(settings.homeItemsPerSection).coerceAtLeast(1))
+    }
 
     Column(
         modifier = Modifier
@@ -2447,16 +2649,17 @@ private fun TvHomeLayoutSettingsPane() {
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 sections.forEachIndexed { index, sec ->
+                    val isEnabled = !disabledKeys.contains(sec.key)
                     TvSettingsReorderRow(
-                        title = sec.first,
-                        isEnabled = sec.second,
+                        title = sec.title,
+                        isEnabled = isEnabled,
                         isFirst = index == 0,
                         isLast = index == sections.size - 1,
-                        showsPremiumBadge = sec.third && !settings.isPremium,
+                        showsPremiumBadge = sec.isPro && !settings.isPremium,
                         onToggle = {
-                            sections = sections.toMutableList().also {
-                                it[index] = it[index].copy(second = !sec.second)
-                            }
+                            val newEnabled = !isEnabled
+                            settings.setHomeSectionEnabled(sec.key, newEnabled)
+                            disabledKeys = settings.homeDisabledSections
                         },
                         onMoveUp = {
                             if (index > 0) {
@@ -2465,6 +2668,7 @@ private fun TvHomeLayoutSettingsPane() {
                                 list[index] = list[index - 1]
                                 list[index - 1] = temp
                                 sections = list
+                                settings.homeSectionOrder = list.joinToString(",") { it.key }
                             }
                         },
                         onMoveDown = {
@@ -2474,6 +2678,7 @@ private fun TvHomeLayoutSettingsPane() {
                                 list[index] = list[index + 1]
                                 list[index + 1] = temp
                                 sections = list
+                                settings.homeSectionOrder = list.joinToString(",") { it.key }
                             }
                         }
                     )
@@ -2518,12 +2723,18 @@ private fun TvHomeLayoutSettingsPane() {
                     TvOptionCycleRow(
                         title = "Layout",
                         value = homeStyles[homeStyleIndex],
-                        onAdvance = { homeStyleIndex = (homeStyleIndex + 1) % homeStyles.size }
+                        onAdvance = {
+                            homeStyleIndex = (homeStyleIndex + 1) % homeStyles.size
+                            settings.homeLayoutStyle = homeStyles[homeStyleIndex]
+                        }
                     )
                     TvOptionCycleRow(
                         title = "Items per Section",
-                        value = itemCounts[itemsPerSectionIndex],
-                        onAdvance = { itemsPerSectionIndex = (itemsPerSectionIndex + 1) % itemCounts.size }
+                        value = itemCounts[itemsPerSectionIndex].toString(),
+                        onAdvance = {
+                            itemsPerSectionIndex = (itemsPerSectionIndex + 1) % itemCounts.size
+                            settings.homeItemsPerSection = itemCounts[itemsPerSectionIndex]
+                        }
                     )
                 }
             }
@@ -2765,17 +2976,27 @@ private fun TvSportsSettingsPane(
             TvSettingsSectionLabel("Sports Data")
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                val lastRefreshText = if (settings.lastSportsRefreshDate > 0) {
+                    android.text.format.DateUtils.getRelativeTimeSpanString(settings.lastSportsRefreshDate).toString()
+                } else {
+                    "Never"
+                }
+
                 TvSettingsRow(
-                    title = if (isSyncing) "Refreshing…" else "Refresh Now",
+                    title = if (isSyncing) "Refreshing Sports Data…" else "Refresh Now",
                     onClick = {
                         scope.launch {
                             isSyncing = true
-                            delay(1000)
+                            try {
+                                val espn = org.getlume.android.core.network.ESPNClient()
+                                espn.fetchScoreboard("soccer/eng.1")
+                                settings.lastSportsRefreshDate = System.currentTimeMillis()
+                            } catch (_: Exception) {}
                             isSyncing = false
                         }
                     }
                 )
-                TvSettingsValueRow("Last Refreshed", "Just now")
+                TvSettingsValueRow("Last Refreshed", lastRefreshText)
             }
 
             TvSettingsFooter("Follow leagues and teams to build your Sports Hub. Fixtures, live scores and standings come from ESPN, and each game links to a channel in your playlists.")
@@ -2855,18 +3076,26 @@ private fun TvPlayerSettingsPane(
     var chooseSource by remember { mutableStateOf(settings.chooseSourceBeforePlaying) }
     var liveQualitySwitch by remember { mutableStateOf(settings.showLiveQualitySwitch) }
     var remoteSwipes by remember { mutableStateOf(settings.remoteSwipeGestures) }
-    var channelSurfingIndex by remember { mutableStateOf(0) }
     val channelSurfingModes = listOf("Remote Order", "List Order")
-    var streamInfoIndex by remember { mutableStateOf(1) } // Advanced
-    val streamInfoModes = listOf("Simple", "Advanced")
-    var externalPlayerIndex by remember { mutableStateOf(0) }
-    val externalPlayers = listOf("Off", "VLC Player", "Just Player", "MX Player")
+    var channelSurfingIndex by remember {
+        mutableStateOf(settings.liveSurfMode.ordinal.coerceIn(0, channelSurfingModes.size - 1))
+    }
+    val streamInfoModes = listOf("Off", "Minimal", "Detailed (Bitrate, Codec, FPS, Buffer)")
+    var streamInfoIndex by remember {
+        mutableStateOf(settings.streamInfoLevel.ordinal.coerceIn(0, streamInfoModes.size - 1))
+    }
+    val externalPlayers = listOf("Off", "VLC for Android", "Just Player", "Kodi")
+    var externalPlayerIndex by remember {
+        mutableStateOf(settings.externalPlayer.ordinal.coerceIn(0, externalPlayers.size - 1))
+    }
     var externalPlayerScopeIndex by remember { mutableStateOf(settings.externalPlayerScope.ordinal) }
     val externalPlayerScopes = listOf("All Streams", "Live TV Only", "VOD Only")
     var passthrough by remember { mutableStateOf(settings.audioPassthrough) }
     var tunneledHardware by remember { mutableStateOf(settings.tunneledVideoPlayback) }
-    var bufferIndex by remember { mutableStateOf(1) } // 5s Normal
-    val buffers = listOf("Small (2s)", "Normal (5s)", "Large (15s)", "Extra Large (30s)")
+    val buffers = listOf("Low Latency (2s)", "Default (10s)", "Large (30s)")
+    var bufferIndex by remember {
+        mutableStateOf(settings.bufferSize.ordinal.coerceIn(0, buffers.size - 1))
+    }
 
     Column(
         modifier = Modifier
@@ -2935,7 +3164,10 @@ private fun TvPlayerSettingsPane(
                 TvOptionCycleRow(
                     title = "Channel Surfing",
                     value = channelSurfingModes[channelSurfingIndex],
-                    onAdvance = { channelSurfingIndex = (channelSurfingIndex + 1) % channelSurfingModes.size }
+                    onAdvance = {
+                        channelSurfingIndex = (channelSurfingIndex + 1) % channelSurfingModes.size
+                        settings.liveSurfMode = LiveSurfMode.values()[channelSurfingIndex]
+                    }
                 )
             }
 
@@ -2974,13 +3206,17 @@ private fun TvPlayerSettingsPane(
                     TvSettingsRow(
                         title = mode,
                         trailingCheckmark = streamInfoIndex == index,
-                        onClick = { streamInfoIndex = index }
+                        onClick = {
+                            streamInfoIndex = index
+                            settings.streamInfoLevel = StreamInfoLevel.values()[index]
+                        }
                     )
                 }
             }
 
             TvSettingsFooter(
-                if (streamInfoIndex == 0) "Shows the playlist and what's on now."
+                if (streamInfoIndex == 0) "Stream technical readout is disabled."
+                else if (streamInfoIndex == 1) "Shows the playlist and what's on now."
                 else "Adds the technical readout: quality, codec, frame rate, and playback engine."
             )
         }
@@ -2994,7 +3230,10 @@ private fun TvPlayerSettingsPane(
                 TvOptionCycleRow(
                     title = "External Player",
                     value = externalPlayers[externalPlayerIndex],
-                    onAdvance = { externalPlayerIndex = (externalPlayerIndex + 1) % externalPlayers.size }
+                    onAdvance = {
+                        externalPlayerIndex = (externalPlayerIndex + 1) % externalPlayers.size
+                        settings.externalPlayer = ExternalPlayerType.values()[externalPlayerIndex]
+                    }
                 )
                 if (externalPlayerIndex > 0) {
                     TvOptionCycleRow(
@@ -3017,7 +3256,10 @@ private fun TvPlayerSettingsPane(
                 TvOptionCycleRow(
                     title = "Buffer Size",
                     value = buffers[bufferIndex],
-                    onAdvance = { bufferIndex = (bufferIndex + 1) % buffers.size }
+                    onAdvance = {
+                        bufferIndex = (bufferIndex + 1) % buffers.size
+                        settings.bufferSize = BufferSizeType.values()[bufferIndex]
+                    }
                 )
             }
 
@@ -3033,17 +3275,30 @@ private fun TvPlayerSettingsPane(
 private fun TvSubtitleStylePane(
     onBack: () -> Unit
 ) {
-    var sizeIndex by remember { mutableStateOf(1) }
+    val settings = remember { AppSettings.get() }
     val sizes = listOf("Small", "Medium", "Large", "Extra Large")
-    var fontIndex by remember { mutableStateOf(0) }
+    val sizeValues = listOf(16, 20, 24, 28)
+    var sizeIndex by remember {
+        mutableStateOf(sizeValues.indexOf(settings.subtitleSizeSp).let { if (it >= 0) it else 1 })
+    }
     val fonts = listOf("System", "Monospaced", "Serif", "Rounded")
-    var isBold by remember { mutableStateOf(false) }
-    var colorIndex by remember { mutableStateOf(0) }
+    var fontIndex by remember {
+        mutableStateOf(fonts.indexOf(settings.subtitleFont).let { if (it >= 0) it else 0 })
+    }
+    var isBold by remember { mutableStateOf(settings.subtitleBold) }
     val colors = listOf("White", "Yellow", "Cyan", "Green")
-    var boxIndex by remember { mutableStateOf(1) }
+    val colorHexes = listOf("#FFFFFF", "#FFD54F", "#4DD0E1", "#81C784")
+    var colorIndex by remember {
+        mutableStateOf(colorHexes.indexOf(settings.subtitleColorHex).let { if (it >= 0) it else 0 })
+    }
     val boxes = listOf("None", "Translucent", "Solid")
-    var positionIndex by remember { mutableStateOf(0) }
+    var boxIndex by remember {
+        mutableStateOf(if (!settings.subtitleBackground) 0 else 1)
+    }
     val positions = listOf("Bottom", "Middle", "Top")
+    var positionIndex by remember {
+        mutableStateOf(positions.indexOf(settings.subtitlePosition).let { if (it >= 0) it else 0 })
+    }
 
     Column(
         modifier = Modifier
@@ -3060,11 +3315,18 @@ private fun TvSubtitleStylePane(
                 .height(200.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(Color(0xFF1E222B)),
-            contentAlignment = Alignment.BottomCenter
+            contentAlignment = when (positionIndex) {
+                1 -> Alignment.Center
+                2 -> Alignment.TopCenter
+                else -> Alignment.BottomCenter
+            }
         ) {
             Box(
                 modifier = Modifier
-                    .padding(bottom = 24.dp)
+                    .padding(
+                        top = if (positionIndex == 2) 24.dp else 0.dp,
+                        bottom = if (positionIndex == 0) 24.dp else 0.dp
+                    )
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (boxIndex == 0) Color.Transparent else if (boxIndex == 1) Color.Black.copy(alpha = 0.65f) else Color.Black)
                     .padding(horizontal = 14.dp, vertical = 6.dp)
@@ -3077,12 +3339,12 @@ private fun TvSubtitleStylePane(
                         3 -> Color(0xFF81C784)
                         else -> Color.White
                     },
-                    fontSize = when (sizeIndex) {
-                        0 -> 16.sp
-                        1 -> 20.sp
-                        2 -> 24.sp
-                        else -> 28.sp
+                    fontFamily = when (fontIndex) {
+                        1 -> FontFamily.Monospace
+                        2 -> FontFamily.Serif
+                        else -> FontFamily.Default
                     },
+                    fontSize = sizeValues[sizeIndex].sp,
                     fontWeight = if (isBold) FontWeight.Bold else FontWeight.Medium
                 )
             }
@@ -3092,26 +3354,44 @@ private fun TvSubtitleStylePane(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Box(modifier = Modifier.weight(1f)) {
-                    TvOptionCycleRow("Size", sizes[sizeIndex]) { sizeIndex = (sizeIndex + 1) % sizes.size }
+                    TvOptionCycleRow("Size", sizes[sizeIndex]) {
+                        sizeIndex = (sizeIndex + 1) % sizes.size
+                        settings.subtitleSizeSp = sizeValues[sizeIndex]
+                    }
                 }
                 Box(modifier = Modifier.weight(1f)) {
-                    TvOptionCycleRow("Font", fonts[fontIndex]) { fontIndex = (fontIndex + 1) % fonts.size }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Box(modifier = Modifier.weight(1f)) {
-                    TvOptionToggleRow("Bold", isBold) { isBold = it }
-                }
-                Box(modifier = Modifier.weight(1f)) {
-                    TvOptionCycleRow("Text Color", colors[colorIndex]) { colorIndex = (colorIndex + 1) % colors.size }
+                    TvOptionCycleRow("Font", fonts[fontIndex]) {
+                        fontIndex = (fontIndex + 1) % fonts.size
+                        settings.subtitleFont = fonts[fontIndex]
+                    }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Box(modifier = Modifier.weight(1f)) {
-                    TvOptionCycleRow("Box", boxes[boxIndex]) { boxIndex = (boxIndex + 1) % boxes.size }
+                    TvOptionToggleRow("Bold", isBold) {
+                        isBold = it
+                        settings.subtitleBold = it
+                    }
                 }
                 Box(modifier = Modifier.weight(1f)) {
-                    TvOptionCycleRow("Position", positions[positionIndex]) { positionIndex = (positionIndex + 1) % positions.size }
+                    TvOptionCycleRow("Text Color", colors[colorIndex]) {
+                        colorIndex = (colorIndex + 1) % colors.size
+                        settings.subtitleColorHex = colorHexes[colorIndex]
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Box(modifier = Modifier.weight(1f)) {
+                    TvOptionCycleRow("Box", boxes[boxIndex]) {
+                        boxIndex = (boxIndex + 1) % boxes.size
+                        settings.subtitleBackground = (boxIndex != 0)
+                    }
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    TvOptionCycleRow("Position", positions[positionIndex]) {
+                        positionIndex = (positionIndex + 1) % positions.size
+                        settings.subtitlePosition = positions[positionIndex]
+                    }
                 }
             }
             TvSettingsRow(
@@ -3123,6 +3403,12 @@ private fun TvSubtitleStylePane(
                     colorIndex = 0
                     boxIndex = 1
                     positionIndex = 0
+                    settings.subtitleSizeSp = 20
+                    settings.subtitleFont = "System"
+                    settings.subtitleBold = false
+                    settings.subtitleColorHex = "#FFFFFF"
+                    settings.subtitleBackground = true
+                    settings.subtitlePosition = "Bottom"
                 }
             )
         }
@@ -3202,15 +3488,48 @@ private fun TvAudioLanguagesPane(
     onOpenAddLanguage: () -> Unit,
     onBack: () -> Unit
 ) {
+    val settings = remember { AppSettings.get() }
+    val languageCodeMap = remember {
+        mapOf(
+            "en" to Pair("English", "ENG"),
+            "es" to Pair("Spanish", "SPA"),
+            "fr" to Pair("French", "FRA"),
+            "de" to Pair("German", "DEU"),
+            "it" to Pair("Italian", "ITA"),
+            "pt" to Pair("Portuguese", "POR"),
+            "ja" to Pair("Japanese", "JPN"),
+            "ko" to Pair("Korean", "KOR"),
+            "zh" to Pair("Chinese", "ZHO"),
+            "ar" to Pair("Arabic", "ARA"),
+            "hi" to Pair("Hindi", "HIN"),
+            "ru" to Pair("Russian", "RUS"),
+            "pl" to Pair("Polish", "POL"),
+            "nl" to Pair("Dutch", "NLD"),
+            "tr" to Pair("Turkish", "TUR"),
+            "sv" to Pair("Swedish", "SWE")
+        )
+    }
+
     var languages by remember {
+        val parsed = settings.preferredAudioLanguages.split(",")
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+            .map { code ->
+                languageCodeMap[code] ?: Pair(code.uppercase(), code.uppercase())
+            }
         mutableStateOf(
-            listOf(
+            if (parsed.isNotEmpty()) parsed else listOf(
                 Pair("English", "ENG"),
                 Pair("Spanish", "SPA"),
                 Pair("French", "FRA"),
                 Pair("German", "DEU")
             )
         )
+    }
+
+    fun persistLanguages(list: List<Pair<String, String>>) {
+        languages = list
+        settings.preferredAudioLanguages = list.joinToString(",") { it.second.lowercase() }
     }
 
     Column(
@@ -3236,7 +3555,7 @@ private fun TvAudioLanguagesPane(
                                 val temp = list[index]
                                 list[index] = list[index - 1]
                                 list[index - 1] = temp
-                                languages = list
+                                persistLanguages(list)
                             }
                         },
                         onMoveDown = {
@@ -3245,13 +3564,13 @@ private fun TvAudioLanguagesPane(
                                 val temp = list[index]
                                 list[index] = list[index + 1]
                                 list[index + 1] = temp
-                                languages = list
+                                persistLanguages(list)
                             }
                         },
                         onRemove = {
                             val list = languages.toMutableList()
                             list.removeAt(index)
-                            languages = list
+                            persistLanguages(list)
                         }
                     )
                 }
@@ -3277,6 +3596,7 @@ private fun TvAudioLanguagesPane(
 private fun TvAddAudioLanguagePane(
     onBack: () -> Unit
 ) {
+    val settings = remember { AppSettings.get() }
     val suggested = listOf(
         Pair("English", "ENG"),
         Pair("Spanish", "SPA"),
@@ -3298,6 +3618,19 @@ private fun TvAddAudioLanguagePane(
         Pair("Swedish", "SWE")
     )
 
+    fun addLanguage(lang: Pair<String, String>) {
+        val existing = settings.preferredAudioLanguages.split(",")
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+            .toMutableList()
+        val code = lang.second.lowercase()
+        if (!existing.contains(code)) {
+            existing.add(code)
+            settings.preferredAudioLanguages = existing.joinToString(",")
+        }
+        onBack()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -3313,7 +3646,7 @@ private fun TvAddAudioLanguagePane(
                     TvSettingsRow(
                         title = lang.first,
                         value = lang.second,
-                        onClick = onBack
+                        onClick = { addLanguage(lang) }
                     )
                 }
             }
@@ -3326,7 +3659,7 @@ private fun TvAddAudioLanguagePane(
                     TvSettingsRow(
                         title = lang.first,
                         value = lang.second,
-                        onClick = onBack
+                        onClick = { addLanguage(lang) }
                     )
                 }
             }
@@ -3343,14 +3676,23 @@ private fun TvEnginesPane(
     onOpenVlcOptions: () -> Unit,
     onBack: () -> Unit
 ) {
-    var engines by remember {
-        mutableStateOf(
-            listOf(
-                Triple("ExoPlayer (Hardware Accelerated)", "High performance hardware decoding for modern codecs", true),
-                Triple("ExoPlayer (Tunneled Video)", "Low latency synchronized A/V pipeline for Shield TV", true),
-                Triple("LibVLC (Software Fallback)", "Maximum format compatibility for legacy TS and codecs", true)
-            )
+    val settings = remember { AppSettings.get() }
+    val engineDefs = remember {
+        mapOf(
+            "exoplayer_hw" to Triple("ExoPlayer (Hardware Accelerated)", "High performance hardware decoding for modern codecs", true),
+            "exoplayer_tunneled" to Triple("ExoPlayer (Tunneled Video)", "Low latency synchronized A/V pipeline for Shield TV", true),
+            "vlc_sw" to Triple("LibVLC (Software Fallback)", "Maximum format compatibility for legacy TS and codecs", true)
         )
+    }
+
+    var engineKeys by remember {
+        val keys = settings.enginePriority.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        mutableStateOf(if (keys.isNotEmpty()) keys else listOf("exoplayer_hw", "exoplayer_tunneled", "vlc_sw"))
+    }
+
+    fun persistPriority(newKeys: List<String>) {
+        engineKeys = newKeys
+        settings.enginePriority = newKeys.joinToString(",")
     }
 
     Column(
@@ -3365,27 +3707,28 @@ private fun TvEnginesPane(
             TvSettingsSectionLabel("Priority")
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                engines.forEachIndexed { index, engine ->
+                engineKeys.forEachIndexed { index, key ->
+                    val def = engineDefs[key] ?: Triple(key, "", true)
                     TvSettingsReorderRow(
-                        title = engine.first,
+                        title = def.first,
                         isFirst = index == 0,
-                        isLast = index == engines.size - 1,
+                        isLast = index == engineKeys.size - 1,
                         onMoveUp = {
                             if (index > 0) {
-                                val list = engines.toMutableList()
+                                val list = engineKeys.toMutableList()
                                 val temp = list[index]
                                 list[index] = list[index - 1]
                                 list[index - 1] = temp
-                                engines = list
+                                persistPriority(list)
                             }
                         },
                         onMoveDown = {
-                            if (index < engines.size - 1) {
-                                val list = engines.toMutableList()
+                            if (index < engineKeys.size - 1) {
+                                val list = engineKeys.toMutableList()
                                 val temp = list[index]
                                 list[index] = list[index + 1]
                                 list[index + 1] = temp
-                                engines = list
+                                persistPriority(list)
                             }
                         }
                     )
@@ -3410,11 +3753,7 @@ private fun TvEnginesPane(
                     onClick = onOpenVlcOptions
                 )
                 TvSettingsRow("Restore Default Engine Priority") {
-                    engines = listOf(
-                        Triple("ExoPlayer (Hardware Accelerated)", "High performance hardware decoding", true),
-                        Triple("ExoPlayer (Tunneled Video)", "Low latency synchronized A/V pipeline", true),
-                        Triple("LibVLC (Software Fallback)", "Maximum format compatibility", true)
-                    )
+                    persistPriority(listOf("exoplayer_hw", "exoplayer_tunneled", "vlc_sw"))
                 }
             }
 
@@ -3434,12 +3773,21 @@ private fun TvExoPlayerOptionsPane(
     var hardwareAccel by remember { mutableStateOf(settings.tunneledVideoPlayback) }
     var passthrough by remember { mutableStateOf(settings.audioPassthrough) }
     var reconnect by remember { mutableStateOf(settings.exoPlayerHttpReconnect) }
-    var liveBufferIndex by remember { mutableStateOf(1) } // 5s
     val liveBuffers = listOf("1 Second", "2 Seconds", "5 Seconds (Recommended)", "10 Seconds")
-    var vodBufferIndex by remember { mutableStateOf(1) } // 15s
+    val liveBufferMs = listOf(1000, 2000, 5000, 10000)
+    var liveBufferIndex by remember {
+        mutableStateOf(liveBufferMs.indexOf(settings.exoPlayerLiveBufferMs).let { if (it >= 0) it else 2 })
+    }
     val vodBuffers = listOf("5 Seconds", "15 Seconds (Recommended)", "30 Seconds", "60 Seconds")
-    var probeIndex by remember { mutableStateOf(0) }
+    val vodBufferMs = listOf(5000, 15000, 30000, 60000)
+    var vodBufferIndex by remember {
+        mutableStateOf(vodBufferMs.indexOf(settings.exoPlayerVodBufferMs).let { if (it >= 0) it else 1 })
+    }
     val probeSizes = listOf("Auto (Provider Default)", "1 Megabyte", "5 Megabytes", "10 Megabytes")
+    val probeMb = listOf(0, 1, 5, 10)
+    var probeIndex by remember {
+        mutableStateOf(probeMb.indexOf(settings.exoPlayerProbeSizeMb).let { if (it >= 0) it else 0 })
+    }
 
     Column(
         modifier = Modifier
@@ -3489,17 +3837,26 @@ private fun TvExoPlayerOptionsPane(
                 TvOptionCycleRow(
                     title = "Live Stream Buffer",
                     value = liveBuffers[liveBufferIndex],
-                    onAdvance = { liveBufferIndex = (liveBufferIndex + 1) % liveBuffers.size }
+                    onAdvance = {
+                        liveBufferIndex = (liveBufferIndex + 1) % liveBuffers.size
+                        settings.exoPlayerLiveBufferMs = liveBufferMs[liveBufferIndex]
+                    }
                 )
                 TvOptionCycleRow(
                     title = "VOD Pre-Buffer",
                     value = vodBuffers[vodBufferIndex],
-                    onAdvance = { vodBufferIndex = (vodBufferIndex + 1) % vodBuffers.size }
+                    onAdvance = {
+                        vodBufferIndex = (vodBufferIndex + 1) % vodBuffers.size
+                        settings.exoPlayerVodBufferMs = vodBufferMs[vodBufferIndex]
+                    }
                 )
                 TvOptionCycleRow(
                     title = "Stream Probe Size",
                     value = probeSizes[probeIndex],
-                    onAdvance = { probeIndex = (probeIndex + 1) % probeSizes.size }
+                    onAdvance = {
+                        probeIndex = (probeIndex + 1) % probeSizes.size
+                        settings.exoPlayerProbeSizeMb = probeMb[probeIndex]
+                    }
                 )
             }
 
@@ -3517,12 +3874,15 @@ private fun TvExoPlayerOptionsPane(
                         hardwareAccel = true
                         passthrough = false
                         reconnect = true
-                        liveBufferIndex = 1
+                        liveBufferIndex = 2
                         vodBufferIndex = 1
                         probeIndex = 0
                         settings.tunneledVideoPlayback = true
                         settings.audioPassthrough = false
                         settings.exoPlayerHttpReconnect = true
+                        settings.exoPlayerLiveBufferMs = 5000
+                        settings.exoPlayerVodBufferMs = 15000
+                        settings.exoPlayerProbeSizeMb = 0
                     }
                 )
             }
@@ -3538,16 +3898,27 @@ private fun TvVlcOptionsPane(
     onBack: () -> Unit
 ) {
     val settings = remember { AppSettings.get() }
-    var hwDecodingIndex by remember { mutableStateOf(0) }
     val hwModes = listOf("Auto (Recommended)", "Hardware Enabled", "Software Only")
-    var deinterlaceIndex by remember { mutableStateOf(1) } // Auto
+    val hwValues = listOf("Auto", "Hardware Enabled", "Software Only")
+    var hwDecodingIndex by remember {
+        mutableStateOf(hwValues.indexOf(settings.vlcHardwareDecoding).let { if (it >= 0) it else 0 })
+    }
     val deinterlaceModes = listOf("Off", "Auto", "Blend", "Bob", "Yadif")
-    var netCachingIndex by remember { mutableStateOf(1) } // 1500ms
+    var deinterlaceIndex by remember {
+        mutableStateOf(deinterlaceModes.indexOf(settings.vlcDeinterlaceMode).let { if (it >= 0) it else 1 })
+    }
     val netCachings = listOf("500 ms (Low Latency)", "1500 ms (Default)", "3000 ms (High Stability)", "5000 ms")
+    val netCachingMs = listOf(500, 1500, 3000, 5000)
+    var netCachingIndex by remember {
+        mutableStateOf(netCachingMs.indexOf(settings.vlcNetworkCachingMs).let { if (it >= 0) it else 1 })
+    }
     var skipFrames by remember { mutableStateOf(settings.vlcSkipFrames) }
     var dropLate by remember { mutableStateOf(settings.vlcDropLateFrames) }
-    var audioOutIndex by remember { mutableStateOf(0) }
     val audioOutputs = listOf("AudioTrack (Android Standard)", "OpenSL ES (Low Latency Native)")
+    val audioOutputValues = listOf("AudioTrack", "OpenSL ES")
+    var audioOutIndex by remember {
+        mutableStateOf(audioOutputValues.indexOf(settings.vlcAudioOutput).let { if (it >= 0) it else 0 })
+    }
 
     Column(
         modifier = Modifier
@@ -3564,12 +3935,18 @@ private fun TvVlcOptionsPane(
                 TvOptionCycleRow(
                     title = "Hardware Decoding",
                     value = hwModes[hwDecodingIndex],
-                    onAdvance = { hwDecodingIndex = (hwDecodingIndex + 1) % hwModes.size }
+                    onAdvance = {
+                        hwDecodingIndex = (hwDecodingIndex + 1) % hwModes.size
+                        settings.vlcHardwareDecoding = hwValues[hwDecodingIndex]
+                    }
                 )
                 TvOptionCycleRow(
                     title = "Deinterlace Mode",
                     value = deinterlaceModes[deinterlaceIndex],
-                    onAdvance = { deinterlaceIndex = (deinterlaceIndex + 1) % deinterlaceModes.size }
+                    onAdvance = {
+                        deinterlaceIndex = (deinterlaceIndex + 1) % deinterlaceModes.size
+                        settings.vlcDeinterlaceMode = deinterlaceModes[deinterlaceIndex]
+                    }
                 )
                 TvOptionToggleRow(
                     title = "Skip Frames on Congestion",
@@ -3599,12 +3976,18 @@ private fun TvVlcOptionsPane(
                 TvOptionCycleRow(
                     title = "Network Caching",
                     value = netCachings[netCachingIndex],
-                    onAdvance = { netCachingIndex = (netCachingIndex + 1) % netCachings.size }
+                    onAdvance = {
+                        netCachingIndex = (netCachingIndex + 1) % netCachings.size
+                        settings.vlcNetworkCachingMs = netCachingMs[netCachingIndex]
+                    }
                 )
                 TvOptionCycleRow(
                     title = "Audio Output Backend",
                     value = audioOutputs[audioOutIndex],
-                    onAdvance = { audioOutIndex = (audioOutIndex + 1) % audioOutputs.size }
+                    onAdvance = {
+                        audioOutIndex = (audioOutIndex + 1) % audioOutputs.size
+                        settings.vlcAudioOutput = audioOutputValues[audioOutIndex]
+                    }
                 )
             }
 
@@ -3625,6 +4008,12 @@ private fun TvVlcOptionsPane(
                         skipFrames = false
                         dropLate = true
                         audioOutIndex = 0
+                        settings.vlcHardwareDecoding = "Auto"
+                        settings.vlcDeinterlaceMode = "Auto"
+                        settings.vlcNetworkCachingMs = 1500
+                        settings.vlcSkipFrames = false
+                        settings.vlcDropLateFrames = true
+                        settings.vlcAudioOutput = "AudioTrack"
                     }
                 )
             }
@@ -3891,6 +4280,7 @@ private fun TvDeviceCodeCard(
 // ==========================================
 @Composable
 private fun TvStorageSettingsPane() {
+    val context = LocalContext.current
     var isClearing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val db = LumeApp.instance.database
@@ -3901,11 +4291,45 @@ private fun TvStorageSettingsPane() {
     val isSyncing by org.getlume.android.core.sync.ContentSyncManager.isSyncing.collectAsState()
     val syncProgress by org.getlume.android.core.sync.ContentSyncManager.syncProgress.collectAsState()
 
+    var imageCacheSizeMb by remember { mutableStateOf(0.0) }
+    var metadataCacheSizeMb by remember { mutableStateOf(0.0) }
+    var dbSizeMb by remember { mutableStateOf(0.0) }
+
+    fun computeSizes() {
+        scope.launch(Dispatchers.IO) {
+            fun getFolderSize(file: File): Long {
+                if (!file.exists()) return 0L
+                var total = 0L
+                if (file.isDirectory) {
+                    file.listFiles()?.forEach { total += getFolderSize(it) }
+                } else {
+                    total += file.length()
+                }
+                return total
+            }
+
+            val imageCacheDir = File(context.cacheDir, "image_cache")
+            val imgBytes = getFolderSize(imageCacheDir)
+            val totalCacheBytes = getFolderSize(context.cacheDir)
+            val metaBytes = (totalCacheBytes - imgBytes).coerceAtLeast(0L)
+
+            val dbFile = context.getDatabasePath("lume_database")
+            val dbBytes = if (dbFile.exists()) dbFile.length() else 0L
+
+            withContext(Dispatchers.Main) {
+                imageCacheSizeMb = imgBytes / (1024.0 * 1024.0)
+                metadataCacheSizeMb = metaBytes / (1024.0 * 1024.0)
+                dbSizeMb = dbBytes / (1024.0 * 1024.0)
+            }
+        }
+    }
+
     LaunchedEffect(activePlaylist, isSyncing) {
         activePlaylist?.let { pl ->
             movieCount = db.vodDao().getMovieCount(pl.id)
             seriesCount = db.vodDao().getSeriesCount(pl.id)
         }
+        computeSizes()
     }
 
     Column(
@@ -3930,8 +4354,13 @@ private fun TvStorageSettingsPane() {
             TvSettingsSectionLabel("Storage Used")
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                TvSettingsValueRow("Library Data", "${(channels.size * 0.005 + movieCount * 0.005 + 5.0).toInt()} MB")
-                TvSettingsValueRow("Image Cache", "12.4 MB")
+                TvSettingsValueRow(
+                    "Library Data",
+                    if (dbSizeMb > 0.0) String.format("%.1f MB", dbSizeMb)
+                    else "${(channels.size * 0.005 + movieCount * 0.005 + 5.0).toInt()} MB"
+                )
+                TvSettingsValueRow("Image Cache", String.format("%.1f MB", imageCacheSizeMb))
+                TvSettingsValueRow("Metadata Cache", String.format("%.1f MB", metadataCacheSizeMb))
             }
         }
 
@@ -3952,6 +4381,7 @@ private fun TvStorageSettingsPane() {
                                 org.getlume.android.core.sync.ContentSyncManager.syncInitialCatalog(pl)
                                 movieCount = db.vodDao().getMovieCount(pl.id)
                                 seriesCount = db.vodDao().getSeriesCount(pl.id)
+                                computeSizes()
                             }
                         }
                     }
@@ -3967,24 +4397,42 @@ private fun TvStorageSettingsPane() {
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 TvSettingsRow(
-                    title = "Clear Image Cache",
-                    value = "128.4 MB",
+                    title = if (isClearing) "Clearing Image Cache..." else "Clear Image Cache",
+                    value = String.format("%.1f MB", imageCacheSizeMb),
                     isDestructive = true,
                     onClick = {
                         scope.launch {
                             isClearing = true
-                            delay(500)
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    coil.Coil.imageLoader(context).diskCache?.clear()
+                                    coil.Coil.imageLoader(context).memoryCache?.clear()
+                                    val imgDir = File(context.cacheDir, "image_cache")
+                                    if (imgDir.exists()) imgDir.deleteRecursively()
+                                } catch (_: Exception) {}
+                            }
+                            computeSizes()
                             isClearing = false
                         }
                     }
                 )
                 TvSettingsRow(
-                    title = "Clear Metadata Cache",
+                    title = if (isClearing) "Clearing Metadata Cache..." else "Clear Metadata Cache",
+                    value = String.format("%.1f MB", metadataCacheSizeMb),
                     isDestructive = true,
                     onClick = {
                         scope.launch {
                             isClearing = true
-                            delay(500)
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    context.cacheDir.listFiles()?.forEach { file ->
+                                        if (file.name != "image_cache") {
+                                            file.deleteRecursively()
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            computeSizes()
                             isClearing = false
                         }
                     }
@@ -4000,12 +4448,14 @@ private fun TvStorageSettingsPane() {
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 TvSettingsRow(
-                    title = "Clear Watch History",
+                    title = if (isClearing) "Clearing Watch History..." else "Clear Watch History",
                     isDestructive = true,
                     onClick = {
                         scope.launch {
                             isClearing = true
-                            delay(500)
+                            withContext(Dispatchers.IO) {
+                                db.watchProgressDao().clearAllWatchProgress()
+                            }
                             isClearing = false
                         }
                     }
@@ -4123,21 +4573,57 @@ private fun TvHelpSettingsPane(
 private fun TvDiagnosticsPane(
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val settings = remember { AppSettings.get() }
+    val db = LumeApp.instance.database
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+    var channelCount by remember { mutableStateOf(0) }
+    var movieCount by remember { mutableStateOf(0) }
+    var seriesCount by remember { mutableStateOf(0) }
     var detailedLogging by remember { mutableStateOf(settings.detailedLogging) }
 
-    val reportText = remember {
+    LaunchedEffect(activePlaylist) {
+        activePlaylist?.let { pl ->
+            channelCount = db.channelDao().getChannelCount(pl.id)
+            movieCount = db.vodDao().getMovieCount(pl.id)
+            seriesCount = db.vodDao().getSeriesCount(pl.id)
+        }
+    }
+
+    val reportText = remember(channelCount, movieCount, seriesCount, detailedLogging, activePlaylist) {
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        val display = windowManager?.defaultDisplay
+        val resStr = if (display != null) {
+            val mode = display.mode
+            "${mode.physicalWidth}x${mode.physicalHeight} @ ${String.format("%.2f", display.refreshRate)}Hz"
+        } else {
+            "1920x1080 @ 60Hz"
+        }
+
+        val versionStr = try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            "${pInfo.versionName} (Build ${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pInfo.longVersionCode else @Suppress("DEPRECATION") pInfo.versionCode})"
+        } catch (_: Exception) {
+            "1.0.0 (Build 1)"
+        }
+
+        val playlistStr = if (activePlaylist != null) {
+            "${activePlaylist!!.name} (${channelCount} channels, ${movieCount} movies, ${seriesCount} series)"
+        } else {
+            "None Connected"
+        }
+
         """
-        Lume Android TV 1.0.0 (Build 1)
+        Lume Android TV $versionStr
         Device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})
         OS: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})
-        Display: 3840x2160 @ 59.94Hz, HDR10 Supported
-        Primary Engine: ExoPlayer (Hardware Accelerated / Tunneled)
-        Audio Passthrough: AC3, E-AC3, TrueHD, DTS
-        Network: Connected (Local LAN / Wi-Fi)
-        Active Playlist: IPTV Provider (8,950 channels, 1,420 movies, 312 series)
-        EPG Sync: Active (6h refresh interval)
-        Storage: 182 MB images, 14.2 MB metadata
+        Display: $resStr
+        Primary Engine: ${settings.playerEngine.title}
+        Engine Priority: ${settings.enginePriority}
+        Audio Passthrough: ${if (settings.audioPassthrough) "Enabled" else "Disabled"}
+        Active Playlist: $playlistStr
+        EPG Sync: ${settings.syncInterval.title}
+        Buffer Mode: ${settings.bufferSize.title}
         Detailed Logging: ${if (detailedLogging) "Enabled" else "Disabled"}
         """.trimIndent()
     }
@@ -4322,52 +4808,62 @@ fun TvSettingsReorderRow(
     onMoveDown: () -> Unit,
     onRemove: (() -> Unit)? = null
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
+    val rowInteractionSource = remember { MutableInteractionSource() }
+    val isRowFocused by rowInteractionSource.collectIsFocusedAsState()
 
-    val bgModifier = if (isFocused) {
-        Modifier.background(Color.White.copy(alpha = 0.95f))
-    } else {
-        Modifier.background(Color.White.copy(alpha = 0.05f))
-    }
+    val upInteractionSource = remember { MutableInteractionSource() }
+    val isUpFocused by upInteractionSource.collectIsFocusedAsState()
 
-    val foregroundColor = if (isFocused) Color.Black else Color.White
-    val secondaryColor = if (isFocused) Color.Black.copy(alpha = 0.6f) else Color.White.copy(alpha = 0.55f)
+    val downInteractionSource = remember { MutableInteractionSource() }
+    val isDownFocused by downInteractionSource.collectIsFocusedAsState()
 
-    Box(
+    val removeInteractionSource = remember { MutableInteractionSource() }
+    val isRemoveFocused by removeInteractionSource.collectIsFocusedAsState()
+
+    val isAnyFocused = isRowFocused || isUpFocused || isDownFocused || isRemoveFocused
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
-            .then(bgModifier)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = { onToggle?.invoke() }
-            )
-            .padding(horizontal = TVSettingsMetrics.rowHPadding, vertical = 10.dp),
-        contentAlignment = Alignment.CenterStart
+            .background(if (isAnyFocused) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.04f))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        // Left item clickable box
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isRowFocused) Color.White.copy(alpha = 0.95f) else Color.Transparent)
+                .clickable(
+                    interactionSource = rowInteractionSource,
+                    indication = null,
+                    onClick = { onToggle?.invoke() }
+                )
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.weight(1f, fill = false)
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 if (onToggle != null) {
                     Icon(
                         imageVector = if (isEnabled) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                         contentDescription = null,
-                        tint = if (isEnabled) (if (isFocused) Color.Black else Color.White) else secondaryColor,
+                        tint = if (isEnabled) {
+                            if (isRowFocused) Color(0xFF1565C0) else Color(0xFF64B5F6)
+                        } else {
+                            if (isRowFocused) Color.Black.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.35f)
+                        },
                         modifier = Modifier.size(20.dp)
                     )
                 }
                 Text(
                     text = title,
-                    color = if (isEnabled) foregroundColor else secondaryColor,
+                    color = if (isRowFocused) Color.Black else if (isEnabled) Color.White else Color.White.copy(alpha = 0.45f),
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -4375,43 +4871,45 @@ fun TvSettingsReorderRow(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(if (isFocused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.15f))
+                            .background(if (isRowFocused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.15f))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
                             text = "PRO",
-                            color = foregroundColor,
+                            color = if (isRowFocused) Color.Black else Color.White,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
+        }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+        // Action buttons reachable via DPAD_RIGHT
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(start = 8.dp)
+        ) {
+            TvMiniIconButton(
+                icon = Icons.Default.KeyboardArrowUp,
+                enabled = !isFirst,
+                interactionSource = upInteractionSource,
+                onClick = onMoveUp
+            )
+            TvMiniIconButton(
+                icon = Icons.Default.KeyboardArrowDown,
+                enabled = !isLast,
+                interactionSource = downInteractionSource,
+                onClick = onMoveDown
+            )
+            if (onRemove != null) {
                 TvMiniIconButton(
-                    icon = Icons.Default.KeyboardArrowUp,
-                    enabled = !isFirst,
-                    isRowFocused = isFocused,
-                    onClick = onMoveUp
+                    icon = Icons.Default.Remove,
+                    enabled = true,
+                    interactionSource = removeInteractionSource,
+                    onClick = onRemove
                 )
-                TvMiniIconButton(
-                    icon = Icons.Default.KeyboardArrowDown,
-                    enabled = !isLast,
-                    isRowFocused = isFocused,
-                    onClick = onMoveDown
-                )
-                if (onRemove != null) {
-                    TvMiniIconButton(
-                        icon = Icons.Default.Remove,
-                        enabled = true,
-                        isRowFocused = isFocused,
-                        onClick = onRemove
-                    )
-                }
             }
         }
     }
@@ -4423,9 +4921,9 @@ private fun TvMiniIconButton(
     enabled: Boolean = true,
     isRowFocused: Boolean = false,
     tint: Color? = null,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     onClick: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
     val effectiveTint = when {
@@ -4443,7 +4941,7 @@ private fun TvMiniIconButton(
 
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .size(34.dp)
             .clip(CircleShape)
             .background(bg)
             .clickable(
@@ -4793,6 +5291,7 @@ fun TvSettingsFooter(text: String) {
 fun TvDrillInHeader(
     backLabel: String,
     title: String,
+    focusRequester: FocusRequester? = null,
     onBack: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -4805,6 +5304,7 @@ fun TvDrillInHeader(
     ) {
         Box(
             modifier = Modifier
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                 .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
                 .background(if (isFocused) Color.White.copy(alpha = 0.95f) else Color.White.copy(alpha = 0.08f))
                 .clickable(
