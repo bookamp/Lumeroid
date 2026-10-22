@@ -28,9 +28,14 @@ These guidelines are mandatory for all AI agents working within the Lume-Android
 - **Branch & PR Requirement:**
   - Never push directly to `main`.
   - Always create a dedicated feature branch (`feat/<topic>`, `fix/<topic>`, `docs/<topic>`), push to `origin`, and open a Pull Request via GitHub CLI (`gh pr create`).
-- **Atomic File-Level Commits:**
-  - Commit changes in small, bite-sized units per file (or tightly coupled logical pairs).
-  - Each commit message must be a concise summary following Conventional Commits (e.g., `feat(livetv): ...`, `fix(settings): ...`, `docs(agents): ...`).
-- **Detailed PR Descriptions:**
-  - The Pull Request description must provide comprehensive change notes detailing all component updates, parity verifications, and an indexed list of the atomic commits.
-  - Merge only via PR (`gh pr merge`).
+- **Never Auto-Commit During Development:**
+  - Never automatically stage or commit code changes on your own while iterating on tasks.
+  - Await explicit user instruction (e.g., "commit", "check in") before initiating any commit process.
+- **Automated Check-in Pipeline (Triggered by User):**
+  - When the user instructs you to commit or check in code, automatically execute the full release workflow without requiring separate step-by-step prompts:
+    1. **Atomic File-Level Commits:** Stage and commit changes in small, bite-sized units per file (or tightly coupled logical pairs) with concise summary messages following Conventional Commits (e.g., `feat(livetv): ...`, `fix(settings): ...`, `docs(agents): ...`).
+    2. **Push to Remote:** Push the dedicated feature branch to `origin`.
+    3. **Open Pull Request:** Create a PR via `gh pr create` with comprehensive change notes detailing all component updates, parity verifications, and an indexed list of the atomic commits.
+    4. **Merge & Cleanup:** When requested or approved, merge the PR via `gh pr merge` and delete the feature branch.
+
+
