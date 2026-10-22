@@ -54,6 +54,22 @@ fun TvPlayerScreen(
 
     DisposableEffect(currentMedia) {
         playerManager.playMedia(currentMedia)
+        if (currentMedia.isLive) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                val progress = WatchProgressEntity(
+                    contentId = currentMedia.id,
+                    profileId = AppSettings.get().activeProfileId,
+                    title = currentMedia.title,
+                    posterUrl = currentMedia.posterUrl,
+                    contentType = "channel",
+                    positionMs = 0L,
+                    durationMs = 0L,
+                    lastWatchedAt = System.currentTimeMillis(),
+                    isCompleted = false
+                )
+                LumeApp.instance.database.watchProgressDao().saveProgress(progress)
+            }
+        }
         onDispose {
             // Save watch progress if VOD
             if (!currentMedia.isLive && currentPositionMs > 5000L) {
