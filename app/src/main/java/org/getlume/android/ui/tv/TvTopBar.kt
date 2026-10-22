@@ -18,8 +18,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import org.getlume.android.core.settings.AppSettings
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +58,17 @@ fun TvTopBar(
     onFocusChanged: ((Boolean) -> Unit)? = null,
     focusRequester: FocusRequester = remember { FocusRequester() }
 ) {
+    val settings = remember { AppSettings.get() }
+    val revision by settings.revision.collectAsState()
+    val db = remember { org.getlume.android.LumeApp.instance.database }
+    val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
+    val playlistId = activePlaylist?.id ?: ""
+
+    val showMovies = remember(revision, playlistId) { settings.isPlaylistTabVisible(playlistId, "movies") }
+    val showSeries = remember(revision, playlistId) { settings.isPlaylistTabVisible(playlistId, "series") }
+    val showLiveTv = remember(revision, playlistId) { settings.isPlaylistTabVisible(playlistId, "livetv") }
+    val showSports = remember(revision) { settings.libraryShowSports && settings.sportsHubEnabled }
+
     val onBackFromTopBar: (() -> Boolean)? = if (currentScreen != Screen.Home) {
         {
             onSelectScreen(Screen.Home)
@@ -74,7 +87,7 @@ fun TvTopBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 28.dp),
+            .padding(top = 14.dp),
         contentAlignment = Alignment.TopCenter
     ) {
         Row(
@@ -85,7 +98,7 @@ fun TvTopBar(
                 .clip(RoundedCornerShape(32.dp))
                 .background(Color.Black.copy(alpha = 0.55f))
                 .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(32.dp))
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 6.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -95,7 +108,6 @@ fun TvTopBar(
                 contentDescription = "Search",
                 isSelected = currentScreen == Screen.Search,
                 focusRequester = if (currentScreen == Screen.Search) focusRequester else null,
-                canFocus = isTopBarFocused,
                 onClick = onOpenSearch,
                 onMoveDown = onMoveDown,
                 onBack = onBackFromTopBar
@@ -106,51 +118,54 @@ fun TvTopBar(
                 title = "Home",
                 isSelected = currentScreen == Screen.Home,
                 focusRequester = if (currentScreen == Screen.Home) focusRequester else null,
-                canFocus = isTopBarFocused,
                 onClick = { onSelectScreen(Screen.Home) },
                 onMoveDown = onMoveDown,
                 onBack = onBackFromTopBar
             )
 
-            TvTopBarTextItem(
-                title = "Movies",
-                isSelected = currentScreen == Screen.Movies,
-                focusRequester = if (currentScreen == Screen.Movies) focusRequester else null,
-                canFocus = isTopBarFocused,
-                onClick = { onSelectScreen(Screen.Movies) },
-                onMoveDown = onMoveDown,
-                onBack = onBackFromTopBar
-            )
+            if (showMovies) {
+                TvTopBarTextItem(
+                    title = "Movies",
+                    isSelected = currentScreen == Screen.Movies,
+                    focusRequester = if (currentScreen == Screen.Movies) focusRequester else null,
+                    onClick = { onSelectScreen(Screen.Movies) },
+                    onMoveDown = onMoveDown,
+                    onBack = onBackFromTopBar
+                )
+            }
 
-            TvTopBarTextItem(
-                title = "Series",
-                isSelected = currentScreen == Screen.Series,
-                focusRequester = if (currentScreen == Screen.Series) focusRequester else null,
-                canFocus = isTopBarFocused,
-                onClick = { onSelectScreen(Screen.Series) },
-                onMoveDown = onMoveDown,
-                onBack = onBackFromTopBar
-            )
+            if (showSeries) {
+                TvTopBarTextItem(
+                    title = "Series",
+                    isSelected = currentScreen == Screen.Series,
+                    focusRequester = if (currentScreen == Screen.Series) focusRequester else null,
+                    onClick = { onSelectScreen(Screen.Series) },
+                    onMoveDown = onMoveDown,
+                    onBack = onBackFromTopBar
+                )
+            }
 
-            TvTopBarTextItem(
-                title = "Live TV",
-                isSelected = currentScreen == Screen.LiveTv,
-                focusRequester = if (currentScreen == Screen.LiveTv) focusRequester else null,
-                canFocus = isTopBarFocused,
-                onClick = { onSelectScreen(Screen.LiveTv) },
-                onMoveDown = onMoveDown,
-                onBack = onBackFromTopBar
-            )
+            if (showLiveTv) {
+                TvTopBarTextItem(
+                    title = "Live TV",
+                    isSelected = currentScreen == Screen.LiveTv,
+                    focusRequester = if (currentScreen == Screen.LiveTv) focusRequester else null,
+                    onClick = { onSelectScreen(Screen.LiveTv) },
+                    onMoveDown = onMoveDown,
+                    onBack = onBackFromTopBar
+                )
+            }
 
-            TvTopBarTextItem(
-                title = "Sports",
-                isSelected = currentScreen == Screen.Sports,
-                focusRequester = if (currentScreen == Screen.Sports) focusRequester else null,
-                canFocus = isTopBarFocused,
-                onClick = { onSelectScreen(Screen.Sports) },
-                onMoveDown = onMoveDown,
-                onBack = onBackFromTopBar
-            )
+            if (showSports) {
+                TvTopBarTextItem(
+                    title = "Sports",
+                    isSelected = currentScreen == Screen.Sports,
+                    focusRequester = if (currentScreen == Screen.Sports) focusRequester else null,
+                    onClick = { onSelectScreen(Screen.Sports) },
+                    onMoveDown = onMoveDown,
+                    onBack = onBackFromTopBar
+                )
+            }
 
             // Settings Gear Icon Tab
             TvTopBarIconItem(
@@ -158,7 +173,6 @@ fun TvTopBar(
                 contentDescription = "Settings",
                 isSelected = currentScreen == Screen.Settings,
                 focusRequester = if (currentScreen == Screen.Settings) focusRequester else null,
-                canFocus = isTopBarFocused,
                 onClick = onOpenSettings,
                 onMoveDown = onMoveDown,
                 onBack = onBackFromTopBar
@@ -172,7 +186,6 @@ private fun TvTopBarTextItem(
     title: String,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
-    canFocus: Boolean = true,
     onClick: () -> Unit,
     onMoveDown: (() -> Boolean)? = null,
     onBack: (() -> Boolean)? = null
@@ -205,7 +218,6 @@ private fun TvTopBarTextItem(
 
     Box(
         modifier = Modifier
-            .focusProperties { this.canFocus = canFocus }
             .then(focusModifier)
             .scale(scale)
             .clip(RoundedCornerShape(20.dp))
@@ -234,13 +246,13 @@ private fun TvTopBarTextItem(
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 18.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = title,
             color = textColor,
-            fontSize = 15.sp,
+            fontSize = 13.5.sp,
             fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium
         )
     }
@@ -252,7 +264,6 @@ private fun TvTopBarIconItem(
     contentDescription: String,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
-    canFocus: Boolean = true,
     onClick: () -> Unit,
     onMoveDown: (() -> Boolean)? = null,
     onBack: (() -> Boolean)? = null
@@ -285,10 +296,9 @@ private fun TvTopBarIconItem(
 
     Box(
         modifier = Modifier
-            .focusProperties { this.canFocus = canFocus }
             .then(focusModifier)
             .scale(scale)
-            .size(36.dp)
+            .size(32.dp)
             .clip(CircleShape)
             .background(backgroundColor)
             .onPreviewKeyEvent { keyEvent ->
@@ -321,7 +331,7 @@ private fun TvTopBarIconItem(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = iconColor,
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(15.dp)
         )
     }
 }
