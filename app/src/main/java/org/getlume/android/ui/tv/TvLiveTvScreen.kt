@@ -56,10 +56,12 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.media3.common.PlaybackException
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.CategoryEntity
 import org.getlume.android.core.data.entities.ChannelEntity
@@ -119,8 +121,40 @@ fun TvLiveTvScreen(
 
     // 1. Observe real categories & virtual collections
     val categories by db.categoryDao().getCategories(playlistId, "live").collectAsState(initial = emptyList())
+    val allChannels by db.channelDao().observeChannelsByPlaylist(playlistId).collectAsState(initial = emptyList())
     val favoriteChannels by db.channelDao().getFavoriteChannels(playlistId).collectAsState(initial = emptyList())
     val recentChannels by db.channelDao().getRecentlyWatchedChannels(playlistId, activeProfileId).collectAsState(initial = emptyList())
+
+    // Filter categories: exclude empty categories when language filter is active
+    val visibleCategories by produceState<List<CategoryEntity>>(
+        initialValue = categories,
+        categories,
+        allChannels,
+        settings.homeContentLanguages
+    ) {
+        if (settings.homeContentLanguages.isEmpty()) {
+            this.value = categories
+            return@produceState
+        }
+        if (categories.isEmpty()) {
+            this.value = emptyList()
+            return@produceState
+        }
+        this.value = withContext(Dispatchers.Default) {
+            if (allChannels.isEmpty()) {
+                categories.filter { settings.matchesContentLanguage("", it.name) }
+            } else {
+                val catMap = categories.associate { it.id to it.name }
+                val nonEmptyCatIds = allChannels.asSequence()
+                    .filter { chan ->
+                        settings.matchesContentLanguage(chan.name, catMap[chan.categoryId] ?: "")
+                    }
+                    .mapNotNull { it.categoryId }
+                    .toSet()
+                categories.filter { nonEmptyCatIds.contains(it.id) }
+            }
+        }
+    }
 
     // 2. State management
     var selectedSection by remember { mutableStateOf<LiveTvSection?>(null) }
@@ -130,13 +164,44 @@ fun TvLiveTvScreen(
     val switcherFocusRequester = remember { FocusRequester() }
     val channelFirstFocusRequester = remember { FocusRequester() }
 
-    // Seed default selection if null
-    LaunchedEffect(categories, favoriteChannels, recentChannels) {
-        if (selectedSection == null) {
+    val visibleFavoriteChannels by produceState<List<ChannelEntity>>(
+        initialValue = emptyList(),
+        favoriteChannels,
+        categories,
+        settings.homeContentLanguages
+    ) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) favoriteChannels
+            else {
+                val catMap = categories.associate { it.id to it.name }
+                favoriteChannels.filter { settings.matchesContentLanguage(it.name, catMap[it.categoryId] ?: "") }
+            }
+        }
+    }
+
+    val visibleRecentChannels by produceState<List<ChannelEntity>>(
+        initialValue = emptyList(),
+        recentChannels,
+        categories,
+        settings.homeContentLanguages
+    ) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) recentChannels
+            else {
+                val catMap = categories.associate { it.id to it.name }
+                recentChannels.filter { settings.matchesContentLanguage(it.name, catMap[it.categoryId] ?: "") }
+            }
+        }
+    }
+
+    // Seed default selection if null or if current selected category was filtered out
+    LaunchedEffect(visibleCategories, visibleFavoriteChannels, visibleRecentChannels) {
+        val currentSec = selectedSection
+        if (currentSec == null || (currentSec is LiveTvSection.Category && visibleCategories.none { it.id == currentSec.category.id })) {
             selectedSection = when {
-                favoriteChannels.isNotEmpty() -> LiveTvSection.Favorites
-                recentChannels.isNotEmpty() -> LiveTvSection.RecentlyWatched
-                categories.isNotEmpty() -> LiveTvSection.Category(categories.first())
+                visibleFavoriteChannels.isNotEmpty() -> LiveTvSection.Favorites
+                visibleRecentChannels.isNotEmpty() -> LiveTvSection.RecentlyWatched
+                visibleCategories.isNotEmpty() -> LiveTvSection.Category(visibleCategories.first())
                 else -> null
             }
         }
@@ -160,25 +225,40 @@ fun TvLiveTvScreen(
         initialValue = emptyList(),
         selectedSection,
         playlistId,
-        favoriteChannels,
-        recentChannels
+        visibleFavoriteChannels,
+        visibleRecentChannels,
+        visibleCategories,
+        settings.homeContentLanguages
     ) {
         when (val sec = selectedSection) {
             is LiveTvSection.Favorites -> {
-                this.value = favoriteChannels
+                this.value = visibleFavoriteChannels
             }
             is LiveTvSection.RecentlyWatched -> {
-                this.value = recentChannels
+                this.value = visibleRecentChannels
             }
             is LiveTvSection.Category -> {
                 db.channelDao().getChannelsByCategory(playlistId, sec.category.id).collect { list ->
-                    this@produceState.value = list
+                    this@produceState.value = withContext(Dispatchers.Default) {
+                        if (settings.homeContentLanguages.isEmpty()) {
+                            list
+                        } else {
+                            list.filter { settings.matchesContentLanguage(it.name, sec.category.name) }
+                        }
+                    }
                 }
             }
             null -> {
-                if (categories.isNotEmpty()) {
-                    db.channelDao().getChannelsByCategory(playlistId, categories.first().id).collect { list ->
-                        this@produceState.value = list
+                if (visibleCategories.isNotEmpty()) {
+                    val firstCat = visibleCategories.first()
+                    db.channelDao().getChannelsByCategory(playlistId, firstCat.id).collect { list ->
+                        this@produceState.value = withContext(Dispatchers.Default) {
+                            if (settings.homeContentLanguages.isEmpty()) {
+                                list
+                            } else {
+                                list.filter { settings.matchesContentLanguage(it.name, firstCat.name) }
+                            }
+                        }
                     }
                 } else {
                     this.value = emptyList()
@@ -276,38 +356,42 @@ fun TvLiveTvScreen(
             ) {
                 // Pinned Virtual Section 1: Favorites (matching Apple TV TVCategoryRail.swift)
                 val isFavSelected = selectedSection is LiveTvSection.Favorites
-                val isFavTarget = isFavSelected || (selectedSection == null && favoriteChannels.isNotEmpty())
-                item {
-                    TvSidebarRailItem(
-                        title = "Favorites",
-                        icon = Icons.Default.Favorite,
-                        iconTint = Color.White.copy(alpha = 0.8f),
-                        isSelected = isFavSelected,
-                        focusRequester = if (isFavTarget) firstItemFocusRequester else null,
-                        onMoveUp = onMoveUpToTopBar,
-                        onMoveRight = {
-                            try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
-                        },
-                        onClick = { selectedSection = LiveTvSection.Favorites }
-                    )
+                val isFavTarget = isFavSelected || (selectedSection == null && visibleFavoriteChannels.isNotEmpty())
+                if (settings.homeContentLanguages.isEmpty() || visibleFavoriteChannels.isNotEmpty()) {
+                    item {
+                        TvSidebarRailItem(
+                            title = "Favorites",
+                            icon = Icons.Default.Favorite,
+                            iconTint = Color.White.copy(alpha = 0.8f),
+                            isSelected = isFavSelected,
+                            focusRequester = if (isFavTarget) firstItemFocusRequester else null,
+                            onMoveUp = onMoveUpToTopBar,
+                            onMoveRight = {
+                                try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
+                            },
+                            onClick = { selectedSection = LiveTvSection.Favorites }
+                        )
+                    }
                 }
 
                 // Pinned Virtual Section 2: Recently Watched
                 val isRecentsSelected = selectedSection is LiveTvSection.RecentlyWatched
-                val isRecentsTarget = isRecentsSelected || (selectedSection == null && favoriteChannels.isEmpty() && recentChannels.isNotEmpty())
-                item {
-                    TvSidebarRailItem(
-                        title = "Recently Watched",
-                        icon = Icons.Default.History,
-                        iconTint = Color.White.copy(alpha = 0.8f),
-                        isSelected = isRecentsSelected,
-                        focusRequester = if (isRecentsTarget) firstItemFocusRequester else null,
-                        onMoveUp = if (favoriteChannels.isEmpty()) onMoveUpToTopBar else null,
-                        onMoveRight = {
-                            try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
-                        },
-                        onClick = { selectedSection = LiveTvSection.RecentlyWatched }
-                    )
+                val isRecentsTarget = isRecentsSelected || (selectedSection == null && visibleFavoriteChannels.isEmpty() && visibleRecentChannels.isNotEmpty())
+                if (settings.homeContentLanguages.isEmpty() || visibleRecentChannels.isNotEmpty()) {
+                    item {
+                        TvSidebarRailItem(
+                            title = "Recently Watched",
+                            icon = Icons.Default.History,
+                            iconTint = Color.White.copy(alpha = 0.8f),
+                            isSelected = isRecentsSelected,
+                            focusRequester = if (isRecentsTarget) firstItemFocusRequester else null,
+                            onMoveUp = if (visibleFavoriteChannels.isEmpty()) onMoveUpToTopBar else null,
+                            onMoveRight = {
+                                try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
+                            },
+                            onClick = { selectedSection = LiveTvSection.RecentlyWatched }
+                        )
+                    }
                 }
 
                 // Pinned Virtual Section 3: Recordings
@@ -325,7 +409,7 @@ fun TvLiveTvScreen(
                 }
 
                 // Synced Playlist Categories
-                itemsIndexed(categories) { index, category ->
+                itemsIndexed(visibleCategories) { index, category ->
                     val isCatSelected = (selectedSection as? LiveTvSection.Category)?.category?.id == category.id
                     val isFirstInRail = favoriteChannels.isEmpty() && recentChannels.isEmpty() && index == 0
                     val isDefaultTarget = selectedSection == null && isFirstInRail
