@@ -117,6 +117,7 @@ sealed class SettingsDrillIn {
     object RecordingServer : SettingsDrillIn()
     object ManageTeams : SettingsDrillIn()
     object Diagnostics : SettingsDrillIn()
+    object HomeContentLanguages : SettingsDrillIn()
 }
 
 // MARK: - Metrics from Apple TV TVSettingsMetrics
@@ -301,6 +302,11 @@ fun TvSettingsScreen(
                             onBack = popDrillIn
                         )
                     }
+                    is SettingsDrillIn.HomeContentLanguages -> {
+                        TvHomeContentLanguagesPane(
+                            onBack = popDrillIn
+                        )
+                    }
                     null -> {
                         // Render Top-Level Category Pane
                         when (selectedCategory) {
@@ -322,10 +328,17 @@ fun TvSettingsScreen(
                             SettingsCategory.EPG -> TvEpgSettingsPane()
                             SettingsCategory.LIBRARY -> TvLibrarySettingsPane(
                                 onOpenContentManagement = {
-                                    drillInStack.add(SettingsDrillIn.ContentManagement)
+                                     drillInStack.add(SettingsDrillIn.ContentManagement)
+                                },
+                                onOpenContentLanguages = {
+                                     drillInStack.add(SettingsDrillIn.HomeContentLanguages)
                                 }
                             )
-                            SettingsCategory.HOME -> TvHomeLayoutSettingsPane()
+                            SettingsCategory.HOME -> TvHomeLayoutSettingsPane(
+                                onOpenContentLanguages = {
+                                    drillInStack.add(SettingsDrillIn.HomeContentLanguages)
+                                }
+                            )
                             SettingsCategory.LIVETV -> TvLiveTvSettingsPane(
                                 onOpenRecordingServer = {
                                     drillInStack.add(SettingsDrillIn.RecordingServer)
@@ -1961,7 +1974,8 @@ private fun TvEpgSettingsPane() {
 // ==========================================
 @Composable
 private fun TvLibrarySettingsPane(
-    onOpenContentManagement: () -> Unit
+    onOpenContentManagement: () -> Unit,
+    onOpenContentLanguages: () -> Unit = {}
 ) {
     val settings = remember { AppSettings.get() }
     val revision by settings.revision.collectAsState()
@@ -2033,9 +2047,27 @@ private fun TvLibrarySettingsPane(
                     trailingChevron = true,
                     onClick = onOpenContentManagement
                 )
+
+                val selectedCount = settings.homeContentLanguages.size
+                val langSummary = if (selectedCount == 0) {
+                    "All Languages (Show Everything)"
+                } else {
+                    val names = settings.homeContentLanguages.mapNotNull { code ->
+                        ContentLanguageCatalog.findByCode(code)?.displayName
+                    }
+                    if (names.size in 1..3) names.joinToString(", ") else "$selectedCount Selected"
+                }
+
+                TvSettingsRow(
+                    title = "Content Languages",
+                    value = langSummary,
+                    leadingIcon = Icons.Default.Language,
+                    trailingChevron = true,
+                    onClick = onOpenContentLanguages
+                )
             }
 
-            TvSettingsFooter("Hide and reorder categories and channels for the active playlist.")
+            TvSettingsFooter("Filter content across Home, Live TV, Movies, and Series by language, and manage categories and channels.")
         }
 
         // Section: Search
@@ -2595,7 +2627,9 @@ private fun TvFavoriteItemRow(
 data class TvHomeSectionItem(val key: String, val title: String, val isPro: Boolean = false)
 
 @Composable
-private fun TvHomeLayoutSettingsPane() {
+private fun TvHomeLayoutSettingsPane(
+    onOpenContentLanguages: () -> Unit
+) {
     val settings = remember { AppSettings.get() }
 
     val canonicalSections = remember {
@@ -2706,6 +2740,33 @@ private fun TvHomeLayoutSettingsPane() {
             TvSettingsFooter("Show channels you've watched alongside movies and series.")
         }
 
+        // Section: Content Languages
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvSettingsSectionLabel("Content Languages")
+
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                val selectedCount = settings.homeContentLanguages.size
+                val summary = if (selectedCount == 0) {
+                    "All Languages (Show Everything)"
+                } else {
+                    val names = settings.homeContentLanguages.mapNotNull { code ->
+                        ContentLanguageCatalog.findByCode(code)?.displayName
+                    }
+                    if (names.size in 1..3) names.joinToString(", ") else "$selectedCount Selected"
+                }
+
+                TvSettingsRow(
+                    title = "Filter Home Content",
+                    value = summary,
+                    leadingIcon = Icons.Default.Language,
+                    trailingChevron = true,
+                    onClick = onOpenContentLanguages
+                )
+            }
+
+            TvSettingsFooter("Choose languages to show on Home. If nothing is selected, all content will be shown.")
+        }
+
         // Section: Android TV Home Screen Channels (Top Shelf)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             TvSettingsSectionLabel("Android TV Home Channels")
@@ -2740,6 +2801,75 @@ private fun TvHomeLayoutSettingsPane() {
             }
 
             TvSettingsFooter("What Lume shows on your Android TV and Google TV home screen channels. A section appears only when it has content to show.")
+        }
+    }
+}
+
+// ==========================================
+// DRILL-IN: HOME CONTENT LANGUAGES
+// ==========================================
+@Composable
+private fun TvHomeContentLanguagesPane(
+    onBack: () -> Unit
+) {
+    val settings = remember { AppSettings.get() }
+    var activeLangs by remember { mutableStateOf(settings.homeContentLanguages) }
+
+    fun setLanguages(newSet: Set<String>) {
+        activeLangs = newSet
+        settings.homeContentLanguages = newSet
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(28.dp)
+    ) {
+        TvDrillInHeader(backLabel = "Settings", title = "Content Languages", onBack = onBack)
+
+        // Status & Quick Actions
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvSettingsSectionLabel("Filter Status")
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TvSettingsActionButton(
+                    title = if (activeLangs.isEmpty()) "Showing Everything (No Filter)" else "Deselect All (Show Everything)",
+                    prominent = activeLangs.isEmpty(),
+                    onClick = {
+                        setLanguages(emptySet())
+                    }
+                )
+            }
+
+            val statusDescription = if (activeLangs.isEmpty()) {
+                "Showing all content across Home, Live TV, Movies, and Series. Select any languages below to filter."
+            } else {
+                "${activeLangs.size} language(s) selected. Only matching content and categories will appear across Home, Live TV, Movies, and Series. Deselect all to show everything."
+            }
+            TvSettingsFooter(statusDescription)
+        }
+
+        // Section: All Languages (Multiple Selection)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvSettingsSectionLabel("All Languages")
+
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                ContentLanguageCatalog.allLanguages.forEach { lang ->
+                    val isChecked = settings.isHomeContentLanguageEnabled(lang.code)
+                    TvSettingsRow(
+                        title = "${lang.displayName} (${lang.hint})",
+                        trailingCheckmark = isChecked,
+                        onClick = {
+                            val nextChecked = !isChecked
+                            settings.setHomeContentLanguageEnabled(lang.code, nextChecked)
+                            activeLangs = settings.homeContentLanguages
+                        }
+                    )
+                }
+            }
+
+            TvSettingsFooter("Check any languages you want to appear across Home, Live TV, Movies, and Series. If nothing is selected, all content will be shown. Categories with no matching items will be hidden automatically.")
         }
     }
 }
