@@ -12,6 +12,27 @@ These guidelines are mandatory for all AI agents working within the Lume-Android
 - **Runtime Verification & Screenshot Clues on Apple TV:**
   - Source code alone does not always reveal the full picture (such as animation curves, dynamic focus state transitions, subtle gradients, and layout shifts under real data).
   - Whenever visual or functional nuances are unclear, launch the app on Apple TV and capture screenshots or observe live behavior. Use these visual clues as ground-truth evidence to guide implementation.
+- **Apple TV Tunnel Verification & Automated Screenshot Protocol:**
+  - Direct programmatic 4K frame dumps from the Apple TV operating system are performed via `pymobiledevice3` over an RSD (Remote Service Discovery) tunnel.
+  - **Check Tunnel Status First:**
+    - Before capturing screenshots, check if the tunnel server is active and has an established device tunnel:
+      ```bash
+      curl -s http://127.0.0.1:49151/
+      ```
+    - If the connection fails or returns `{}` (empty object), the tunnel is not connected.
+  - **Prompt the User if Tunnel is Inactive:**
+    - If the tunnel is not running or has no active devices, request the user to start it in a terminal:
+      ```bash
+      sudo pymobiledevice3 remote tunneld
+      ```
+      *(Note: Must be executed under Python 3.13+ because tvOS 18.2+ dropped QUIC support and strictly requires TCP tunnels).*
+    - If one-time pairing is ever required, the user must run `pymobiledevice3 remote pair` and input the 6-digit PIN shown on the TV screen.
+  - **Capturing Live Screenshots:**
+    - Once `curl http://127.0.0.1:49151/` returns the active tunnel, capture the frame dump immediately via:
+      ```bash
+      pymobiledevice3 developer dvt screenshot --tunnel "" /path/to/screenshot.png
+      ```
+    - Compare these frame dumps side-by-side with Android TV views to verify 1:1 parity (typography, gradients, spacing, focus states, hero layouts, EPG timeline grids).
 - **Shield TV Deployment & Testing:**
   - The NVIDIA Shield TV is the target Android TV hardware for runtime deployment, remote control D-pad navigation validation, and video playback verification.
   - Test and verify on the Shield TV where necessary before concluding tasks.
@@ -38,4 +59,8 @@ These guidelines are mandatory for all AI agents working within the Lume-Android
     3. **Open Pull Request:** Create a PR via `gh pr create` with comprehensive change notes detailing all component updates, parity verifications, and an indexed list of the atomic commits.
     4. **Merge & Cleanup:** When requested or approved, merge the PR via `gh pr merge` and delete the feature branch.
 
+---
 
+## 4. File Editing & Tool Usage
+- Always use the built-in file editing/writing tools to modify files.
+- Do NOT use `sed`, `awk`, `echo`, or shell redirection commands to edit file contents.
