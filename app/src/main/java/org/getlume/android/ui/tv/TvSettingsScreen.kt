@@ -13,6 +13,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
@@ -55,6 +56,8 @@ import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.*
 import org.getlume.android.core.designsystem.*
+import org.getlume.android.core.designsystem.TvFocusRescue
+import org.getlume.android.core.player.ActiveModalStore
 import org.getlume.android.core.network.LanSetupServer
 import org.getlume.android.core.settings.*
 import org.getlume.android.core.sync.PlaylistSyncManager
@@ -120,19 +123,20 @@ sealed class SettingsDrillIn {
     object HomeContentLanguages : SettingsDrillIn()
 }
 
-// MARK: - Metrics from Apple TV TVSettingsMetrics
+// MARK: - Metrics from Apple TV TVSettingsMetrics (0.5x ratio: 1 pt tvOS = 0.5 dp Android)
 object TVSettingsMetrics {
-    val rowHPadding = 20.dp
-    val rowVPadding = 14.dp
-    val rowCornerRadius = 10.dp
-    val railCornerRadius = 18.dp
-    val detailMaxWidth = 860.dp
+    val rowHPadding = 10.dp
+    val rowVPadding = 7.dp
+    val rowCornerRadius = 6.dp
+    val railCornerRadius = 10.dp
+    val detailMaxWidth = 430.dp
 }
 
 @Composable
 fun TvSettingsScreen(
     onOpenAddPlaylist: () -> Unit,
     firstItemFocusRequester: FocusRequester = remember { FocusRequester() },
+    isTopBarFocused: Boolean = false,
     onMoveUpToTopBar: (() -> Unit)? = null
 ) {
     var selectedCategory by remember { mutableStateOf(SettingsCategory.PLAYLISTS) }
@@ -155,27 +159,71 @@ fun TvSettingsScreen(
         popDrillIn()
     }
 
-    // Breadcrumb BackHandler: When in right detail pane, Back retracts focus to the Left sidebar rail
-    BackHandler(enabled = isInContentPane && drillInStack.isEmpty()) {
-        try {
-            firstItemFocusRequester.requestFocus()
-        } catch (_: Exception) {}
-        isInContentPane = false
+    DisposableEffect(Unit) {
+        onDispose {
+            ActiveModalStore.isModalOpen.value = false
+        }
     }
 
-    // Breadcrumb BackHandler: When in Settings sidebar rail, Back retracts focus up to TopBar
-    BackHandler(enabled = !isInContentPane && drillInStack.isEmpty()) {
-        onMoveUpToTopBar?.invoke()
+    LaunchedEffect(drillInStack.size) {
+        ActiveModalStore.isModalOpen.value = drillInStack.isNotEmpty()
+        if (drillInStack.isEmpty()) {
+            delay(50)
+            try {
+                firstItemFocusRequester.requestFocus()
+            } catch (_: Exception) {
+                TvFocusRescue.rescueFocus()
+            }
+        }
+    }
+
+    DisposableEffect(firstItemFocusRequester) {
+        TvFocusRescue.register(firstItemFocusRequester)
+        onDispose {
+            TvFocusRescue.unregister(firstItemFocusRequester)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        var delayMs = 30L
+        for (i in 1..10) {
+            delay(delayMs)
+            try {
+                firstItemFocusRequester.requestFocus()
+                break
+            } catch (_: Exception) {
+                delayMs = (delayMs * 1.3).toLong()
+            }
+        }
+    }
+
+    // Breadcrumb BackHandler: consolidated single handler for settings sidebar and content
+    BackHandler(enabled = !isTopBarFocused && drillInStack.isEmpty()) {
+        if (isInContentPane) {
+            isInContentPane = false
+            var success = false
+            for (i in 0..5) {
+                try {
+                    if (firstItemFocusRequester.requestFocus()) {
+                        success = true
+                        break
+                    }
+                } catch (_: Exception) {}
+            }
+            if (!success) onMoveUpToTopBar?.invoke()
+        } else {
+            onMoveUpToTopBar?.invoke()
+        }
     }
 
     TvAmbientBackground {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = 76.dp, start = 48.dp, end = 48.dp, bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(44.dp)
+                .padding(top = 72.dp, start = 24.dp, end = 24.dp, bottom = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // LEFT COLUMN: TV SIDEBAR RAIL (270dp)
+            // LEFT COLUMN: TV SIDEBAR RAIL (170dp, matching Apple TV TVSidebarRail.swift)
             Box(
                 modifier = Modifier
                     .focusProperties { canFocus = drillInStack.isEmpty() }
@@ -193,12 +241,13 @@ fun TvSettingsScreen(
                 )
             }
 
-            // RIGHT COLUMN: DETAIL PANE CONTAINER (Max 860dp)
+            // RIGHT COLUMN: DETAIL PANE CONTAINER (Max 430dp, matching Apple TV detailMaxWidth)
             Box(
                 modifier = Modifier
                     .weight(1f)
+                    .widthIn(max = TVSettingsMetrics.detailMaxWidth)
                     .fillMaxHeight()
-                    .padding(top = 10.dp)
+                    .padding(top = 8.dp)
                     .onFocusChanged { if (it.hasFocus) isInContentPane = true }
             ) {
                 // If drilled in, render the in-place drill-in sub-pane
@@ -382,7 +431,7 @@ private fun TvSidebarRail(
 ) {
     LazyColumn(
         modifier = Modifier
-            .width(270.dp)
+            .width(170.dp)
             .fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -435,7 +484,7 @@ private fun TvCategoryRailItem(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp)
+            .height(32.dp)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clip(RoundedCornerShape(TVSettingsMetrics.railCornerRadius))
             .then(bgModifier)
@@ -452,13 +501,13 @@ private fun TvCategoryRailItem(
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 10.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Text(
             text = title,
             color = textColor,
-            fontSize = 17.sp,
+            fontSize = 12.5.sp,
             fontWeight = if (isSelected || isFocused) FontWeight.SemiBold else FontWeight.Medium
         )
     }
@@ -1609,6 +1658,7 @@ private fun TvPlaylistsSettingsPane(
                                     onClick = {
                                         scope.launch {
                                             database.playlistDao().setActivePlaylist(playlist.id)
+                                            org.getlume.android.core.settings.ContentFilterCache.rebuildAsync(playlist.id)
                                         }
                                     }
                                 )
@@ -1841,6 +1891,10 @@ private fun TvPlaylistDetailPane(
                         isDestructive = true,
                         onClick = {
                             scope.launch {
+                                database.channelDao().deleteChannelsForPlaylist(playlist.id)
+                                database.categoryDao().deleteCategoriesForPlaylist(playlist.id)
+                                database.vodDao().deleteMoviesForPlaylist(playlist.id)
+                                database.vodDao().deleteSeriesForPlaylist(playlist.id)
                                 database.playlistDao().deletePlaylist(playlist)
                                 onBack()
                             }
@@ -2635,6 +2689,7 @@ private fun TvHomeLayoutSettingsPane(
     val canonicalSections = remember {
         listOf(
             TvHomeSectionItem("recentlyWatched", "Recently Watched"),
+            TvHomeSectionItem("recentlyAdded", "Recently Added"),
             TvHomeSectionItem("favorites", "Favorites"),
             TvHomeSectionItem("forYou", "For You", isPro = true),
             TvHomeSectionItem("trendingMovies", "Trending Movies"),
@@ -5301,6 +5356,7 @@ fun TvSettingsValueRow(
 fun TvSettingsActionButton(
     title: String,
     icon: ImageVector? = null,
+    modifier: Modifier = Modifier,
     prominent: Boolean = false,
     isDestructive: Boolean = false,
     onClick: () -> Unit
@@ -5324,9 +5380,10 @@ fun TvSettingsActionButton(
     }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
             .then(bgModifier)
+            .focusable(interactionSource = interactionSource)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
