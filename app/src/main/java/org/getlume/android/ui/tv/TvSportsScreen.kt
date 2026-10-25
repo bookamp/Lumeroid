@@ -1,5 +1,7 @@
 package org.getlume.android.ui.tv
 
+import kotlinx.coroutines.delay
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
@@ -43,6 +45,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.designsystem.*
+import org.getlume.android.core.designsystem.TvFocusRescue
 import org.getlume.android.core.network.ESPNClient
 import org.getlume.android.core.network.SportsFixture
 import org.getlume.android.core.player.PlayableMedia
@@ -57,6 +60,7 @@ import org.getlume.android.core.sports.SportsChannelResolver
 fun TvSportsScreen(
     onPlayMedia: (PlayableMedia) -> Unit,
     firstItemFocusRequester: FocusRequester = remember { FocusRequester() },
+    isTopBarFocused: Boolean = false,
     onMoveUpToTopBar: (() -> Unit)? = null
 ) {
     val db = LumeApp.instance.database
@@ -70,17 +74,32 @@ fun TvSportsScreen(
     var isInFixturesPane by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    // Breadcrumb BackHandler: When in fixtures or matched channels list, Back retracts focus up to League pills
-    BackHandler(enabled = isInFixturesPane) {
-        try {
-            firstItemFocusRequester.requestFocus()
-        } catch (_: Exception) {}
-        isInFixturesPane = false
+    DisposableEffect(firstItemFocusRequester) {
+        TvFocusRescue.register(firstItemFocusRequester)
+        onDispose {
+            TvFocusRescue.unregister(firstItemFocusRequester)
+        }
     }
 
-    // Breadcrumb BackHandler: When in League pills, Back retracts focus up to the TopBar
-    BackHandler(enabled = !isInFixturesPane) {
-        onMoveUpToTopBar?.invoke()
+
+
+    // Breadcrumb BackHandler: consolidated single handler prevents race conditions
+    BackHandler(enabled = !isTopBarFocused) {
+        if (isInFixturesPane) {
+            isInFixturesPane = false
+            var success = false
+            for (i in 0..5) {
+                try {
+                    if (firstItemFocusRequester.requestFocus()) {
+                        success = true
+                        break
+                    }
+                } catch (_: Exception) {}
+            }
+            if (!success) onMoveUpToTopBar?.invoke()
+        } else {
+            onMoveUpToTopBar?.invoke()
+        }
     }
 
     val leagues = remember {
