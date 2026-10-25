@@ -30,6 +30,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Lume"
+        android:largeHeap="true"
         android:usesCleartextTraffic="true">
 
         <activity
