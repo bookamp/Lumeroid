@@ -17,6 +17,7 @@ import org.getlume.android.core.sync.PlaylistSyncManager
 import org.getlume.android.core.settings.AppSettings
 import org.getlume.android.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -38,9 +39,10 @@ fun TvMainScreen(
     val db = remember { org.getlume.android.LumeApp.instance.database }
     val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
     val playlistId = activePlaylist?.id ?: ""
+    val coroutineScope = rememberCoroutineScope()
     var selectedScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var showAddPlaylistModal by remember { mutableStateOf(false) }
-    var isTopBarFocused by remember { mutableStateOf(false) }
+    var isTopBarFocused by remember { mutableStateOf(true) }
 
     // If currently selected screen is hidden via Library settings, fall back to Home
     LaunchedEffect(revision, selectedScreen, playlistId) {
@@ -98,7 +100,7 @@ fun TvMainScreen(
             BackHandler {
                 selectedScreen = Screen.Home
                 try {
-                    homeHeroFocusRequester.requestFocus()
+                    topBarFocusRequester.requestFocus()
                 } catch (_: Exception) {}
             }
         }
@@ -137,6 +139,8 @@ fun TvMainScreen(
                     TvMoviesScreen(
                         onPlayMedia = { media -> activePlaybackMedia = media },
                         firstItemFocusRequester = moviesFirstFocusRequester,
+                        isTopBarFocused = isTopBarFocused,
+                        onContentFocused = { isTopBarFocused = false },
                         onMoveUpToTopBar = {
                             isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
@@ -147,6 +151,8 @@ fun TvMainScreen(
                     TvSeriesScreen(
                         onPlayMedia = { media -> activePlaybackMedia = media },
                         firstItemFocusRequester = seriesFirstFocusRequester,
+                        isTopBarFocused = isTopBarFocused,
+                        onContentFocused = { isTopBarFocused = false },
                         onMoveUpToTopBar = {
                             isTopBarFocused = true
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
@@ -256,6 +262,23 @@ fun TvMainScreen(
                     channelLineup = channelLineup,
                     onBack = {
                         activePlaybackMedia = null
+                        coroutineScope.launch {
+                            kotlinx.coroutines.delay(50)
+                            try {
+                                when (selectedScreen) {
+                                    Screen.Search -> searchFirstFocusRequester.requestFocus()
+                                    Screen.Home -> homeHeroFocusRequester.requestFocus()
+                                    Screen.Movies -> moviesFirstFocusRequester.requestFocus()
+                                    Screen.Series -> seriesFirstFocusRequester.requestFocus()
+                                    Screen.LiveTv -> liveTvFirstFocusRequester.requestFocus()
+                                    Screen.Sports -> sportsFirstFocusRequester.requestFocus()
+                                    Screen.Settings -> settingsFirstFocusRequester.requestFocus()
+                                    else -> {}
+                                }
+                            } catch (_: Exception) {
+                                TvFocusRescue.rescueFocus()
+                            }
+                        }
                     }
                 )
             }
