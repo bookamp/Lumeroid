@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.getlume.android.core.data.LumeDatabase
 import org.getlume.android.core.data.entities.PlaylistEntity
+import org.getlume.android.core.sync.PlaylistSyncManager
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.UUID
@@ -92,14 +93,8 @@ class LanSetupServer(
                             database.playlistDao().insertPlaylist(playlist)
                             database.playlistDao().setActivePlaylist(playlistId)
 
-                            // Initial sync
-                            if (type == "xtream") {
-                                val client = XtreamCodesClient(serverUrl, username, password)
-                                val cats = client.fetchLiveCategories(playlistId)
-                                val streams = client.fetchLiveStreams(playlistId)
-                                database.categoryDao().insertCategories(cats)
-                                database.channelDao().insertChannels(streams)
-                            }
+                            // Full initial sync: populates Live TV, Movies (with tmdbId), and Series (with tmdbId)
+                            PlaylistSyncManager.syncPlaylist(playlist)
                             onPlaylistAdded()
                         }
 
