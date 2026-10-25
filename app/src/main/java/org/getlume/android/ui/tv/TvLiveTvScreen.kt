@@ -11,9 +11,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -64,6 +68,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.CategoryEntity
+import org.getlume.android.core.designsystem.TvFocusRescue
 import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.data.entities.EpgListingEntity
 import org.getlume.android.core.designsystem.*
@@ -71,6 +76,7 @@ import org.getlume.android.core.player.PlayableMedia
 import org.getlume.android.core.player.toCatchupPlayableMedia
 import org.getlume.android.core.player.toPlayableMedia
 import org.getlume.android.core.settings.AppSettings
+import org.getlume.android.core.settings.ContentFilterCache
 import org.getlume.android.core.settings.LiveTVLayoutMode
 import java.text.SimpleDateFormat
 import java.util.*
@@ -109,6 +115,7 @@ data class ChannelEpgData(
 fun TvLiveTvScreen(
     onPlayMedia: (PlayableMedia) -> Unit,
     firstItemFocusRequester: FocusRequester = remember { FocusRequester() },
+    isTopBarFocused: Boolean = false,
     onMoveUpToTopBar: (() -> Unit)? = null,
     onStartMultiView: ((ChannelEntity) -> Unit)? = null
 ) {
@@ -121,39 +128,18 @@ fun TvLiveTvScreen(
 
     // 1. Observe real categories & virtual collections
     val categories by db.categoryDao().getCategories(playlistId, "live").collectAsState(initial = emptyList())
-    val allChannels by db.channelDao().observeChannelsByPlaylist(playlistId).collectAsState(initial = emptyList())
     val favoriteChannels by db.channelDao().getFavoriteChannels(playlistId).collectAsState(initial = emptyList())
     val recentChannels by db.channelDao().getRecentlyWatchedChannels(playlistId, activeProfileId).collectAsState(initial = emptyList())
 
-    // Filter categories: exclude empty categories when language filter is active
-    val visibleCategories by produceState<List<CategoryEntity>>(
-        initialValue = categories,
-        categories,
-        allChannels,
-        settings.homeContentLanguages
-    ) {
-        if (settings.homeContentLanguages.isEmpty()) {
-            this.value = categories
-            return@produceState
-        }
-        if (categories.isEmpty()) {
-            this.value = emptyList()
-            return@produceState
-        }
-        this.value = withContext(Dispatchers.Default) {
-            if (allChannels.isEmpty()) {
-                categories.filter { settings.matchesContentLanguage("", it.name) }
-            } else {
-                val catMap = categories.associate { it.id to it.name }
-                val nonEmptyCatIds = allChannels.asSequence()
-                    .filter { chan ->
-                        settings.matchesContentLanguage(chan.name, catMap[chan.categoryId] ?: "")
-                    }
-                    .mapNotNull { it.categoryId }
-                    .toSet()
-                categories.filter { nonEmptyCatIds.contains(it.id) }
-            }
-        }
+    // Observe precomputed content filter cache
+    val isFiltering by ContentFilterCache.isFiltering.collectAsState()
+    val allowedLiveCatIds by ContentFilterCache.liveCategoryIds.collectAsState()
+    val allowedChannelIds by ContentFilterCache.matchingChannelIds.collectAsState()
+
+    // Filter categories: synchronous instant lookup, 0ms compute, no layout flicker
+    val visibleCategories = remember(categories, isFiltering, allowedLiveCatIds) {
+        if (!isFiltering) categories
+        else categories.filter { allowedLiveCatIds.contains(it.id) }
     }
 
     // 2. State management
@@ -164,34 +150,14 @@ fun TvLiveTvScreen(
     val switcherFocusRequester = remember { FocusRequester() }
     val channelFirstFocusRequester = remember { FocusRequester() }
 
-    val visibleFavoriteChannels by produceState<List<ChannelEntity>>(
-        initialValue = emptyList(),
-        favoriteChannels,
-        categories,
-        settings.homeContentLanguages
-    ) {
-        value = withContext(Dispatchers.Default) {
-            if (settings.homeContentLanguages.isEmpty()) favoriteChannels
-            else {
-                val catMap = categories.associate { it.id to it.name }
-                favoriteChannels.filter { settings.matchesContentLanguage(it.name, catMap[it.categoryId] ?: "") }
-            }
-        }
+    val visibleFavoriteChannels = remember(favoriteChannels, isFiltering, allowedChannelIds) {
+        if (!isFiltering) favoriteChannels
+        else favoriteChannels.filter { allowedChannelIds.contains(it.id) }
     }
 
-    val visibleRecentChannels by produceState<List<ChannelEntity>>(
-        initialValue = emptyList(),
-        recentChannels,
-        categories,
-        settings.homeContentLanguages
-    ) {
-        value = withContext(Dispatchers.Default) {
-            if (settings.homeContentLanguages.isEmpty()) recentChannels
-            else {
-                val catMap = categories.associate { it.id to it.name }
-                recentChannels.filter { settings.matchesContentLanguage(it.name, catMap[it.categoryId] ?: "") }
-            }
-        }
+    val visibleRecentChannels = remember(recentChannels, isFiltering, allowedChannelIds) {
+        if (!isFiltering) recentChannels
+        else recentChannels.filter { allowedChannelIds.contains(it.id) }
     }
 
     // Seed default selection if null or if current selected category was filtered out
@@ -228,7 +194,8 @@ fun TvLiveTvScreen(
         visibleFavoriteChannels,
         visibleRecentChannels,
         visibleCategories,
-        settings.homeContentLanguages
+        isFiltering,
+        allowedChannelIds
     ) {
         when (val sec = selectedSection) {
             is LiveTvSection.Favorites -> {
@@ -239,26 +206,14 @@ fun TvLiveTvScreen(
             }
             is LiveTvSection.Category -> {
                 db.channelDao().getChannelsByCategory(playlistId, sec.category.id).collect { list ->
-                    this@produceState.value = withContext(Dispatchers.Default) {
-                        if (settings.homeContentLanguages.isEmpty()) {
-                            list
-                        } else {
-                            list.filter { settings.matchesContentLanguage(it.name, sec.category.name) }
-                        }
-                    }
+                    this@produceState.value = if (!isFiltering) list else list.filter { allowedChannelIds.contains(it.id) }
                 }
             }
             null -> {
                 if (visibleCategories.isNotEmpty()) {
                     val firstCat = visibleCategories.first()
                     db.channelDao().getChannelsByCategory(playlistId, firstCat.id).collect { list ->
-                        this@produceState.value = withContext(Dispatchers.Default) {
-                            if (settings.homeContentLanguages.isEmpty()) {
-                                list
-                            } else {
-                                list.filter { settings.matchesContentLanguage(it.name, firstCat.name) }
-                            }
-                        }
+                        this@produceState.value = if (!isFiltering) list else list.filter { allowedChannelIds.contains(it.id) }
                     }
                 } else {
                     this.value = emptyList()
@@ -309,16 +264,61 @@ fun TvLiveTvScreen(
         }
     }
 
-    // 6. Breadcrumb remote navigation
-    BackHandler(enabled = isInChannelsPane) {
-        try {
-            firstItemFocusRequester.requestFocus()
-        } catch (_: Exception) {}
-        isInChannelsPane = false
+    val channelListState = rememberLazyListState()
+    val guideListState = rememberLazyListState()
+    var lastFocusedSidebarRequester by remember { mutableStateOf<FocusRequester?>(null) }
+    var lastFocusedChannelRequester by remember { mutableStateOf<FocusRequester?>(null) }
+
+    DisposableEffect(isInChannelsPane, firstItemFocusRequester, lastFocusedChannelRequester, lastFocusedSidebarRequester) {
+        val target = if (isInChannelsPane) {
+            lastFocusedChannelRequester ?: channelFirstFocusRequester
+        } else {
+            lastFocusedSidebarRequester ?: firstItemFocusRequester
+        }
+        TvFocusRescue.register(target)
+        onDispose {
+            TvFocusRescue.unregister(target)
+        }
     }
 
-    BackHandler(enabled = !isInChannelsPane) {
-        onMoveUpToTopBar?.invoke()
+    val restoreSidebarFocus: () -> Unit = {
+        isInChannelsPane = false
+        val req = lastFocusedSidebarRequester ?: firstItemFocusRequester
+        TvFocusRescue.register(req)
+        try {
+            req.requestFocus()
+        } catch (_: Exception) {}
+    }
+
+    LaunchedEffect(selectedSection) {
+        lastFocusedChannelRequester = null
+    }
+
+    val enterChannelsPane: (LiveTvSection) -> Unit = { sec ->
+        selectedSection = sec
+        isInChannelsPane = true
+        scope.launch {
+            for (i in 0..12) {
+                try {
+                    val target = lastFocusedChannelRequester ?: channelFirstFocusRequester
+                    if (target.requestFocus()) {
+                        TvFocusRescue.register(target)
+                        break
+                    }
+                } catch (_: Exception) {}
+                kotlinx.coroutines.delay(25)
+            }
+        }
+    }
+
+    // 6. Breadcrumb remote navigation (consolidated single handler)
+    BackHandler(enabled = !isTopBarFocused) {
+        if (isInChannelsPane) {
+            isInChannelsPane = false
+            restoreSidebarFocus()
+        } else {
+            onMoveUpToTopBar?.invoke()
+        }
     }
 
     Row(
@@ -330,7 +330,7 @@ fun TvLiveTvScreen(
                     radius = 1400f
                 )
             )
-            .padding(top = 54.dp)
+            .padding(top = 72.dp)
     ) {
         // ==========================================
         // LEFT PANE: Floating Category Sidebar (matching Apple TV TVCategoryRail.swift)
@@ -350,48 +350,60 @@ fun TvLiveTvScreen(
                 .onFocusChanged { if (it.hasFocus) isInChannelsPane = false }
                 .padding(horizontal = 6.dp, vertical = 6.dp)
         ) {
+            val categoryRequesters = remember { mutableMapOf<String, FocusRequester>() }
+            val firstCat = visibleCategories.firstOrNull()
+            val favRequester = if (visibleFavoriteChannels.isNotEmpty()) firstItemFocusRequester else remember { FocusRequester() }
+            val recentsRequester = if (visibleFavoriteChannels.isEmpty() && visibleRecentChannels.isNotEmpty()) firstItemFocusRequester else remember { FocusRequester() }
+            if (visibleFavoriteChannels.isEmpty() && visibleRecentChannels.isEmpty() && firstCat != null) {
+                categoryRequesters.getOrPut(firstCat.id) { firstItemFocusRequester }
+            }
+
+            val channelTargetRequester = lastFocusedChannelRequester ?: channelFirstFocusRequester
+
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(1.5.dp),
                 contentPadding = PaddingValues(vertical = 2.dp)
             ) {
                 // Pinned Virtual Section 1: Favorites (matching Apple TV TVCategoryRail.swift)
                 val isFavSelected = selectedSection is LiveTvSection.Favorites
-                val isFavTarget = isFavSelected || (selectedSection == null && visibleFavoriteChannels.isNotEmpty())
-                if (settings.homeContentLanguages.isEmpty() || visibleFavoriteChannels.isNotEmpty()) {
-                    item {
-                        TvSidebarRailItem(
-                            title = "Favorites",
-                            icon = Icons.Default.Favorite,
-                            iconTint = Color.White.copy(alpha = 0.8f),
-                            isSelected = isFavSelected,
-                            focusRequester = if (isFavTarget) firstItemFocusRequester else null,
-                            onMoveUp = onMoveUpToTopBar,
-                            onMoveRight = {
-                                try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
-                            },
-                            onClick = { selectedSection = LiveTvSection.Favorites }
-                        )
-                    }
+                item {
+                    TvSidebarRailItem(
+                        title = "Favorites",
+                        icon = Icons.Default.Favorite,
+                        iconTint = Color.White.copy(alpha = 0.8f),
+                        isSelected = isFavSelected,
+                        focusRequester = favRequester,
+                        rightFocusRequester = channelTargetRequester,
+                        onMoveUp = onMoveUpToTopBar,
+                        onFocused = {
+                            lastFocusedSidebarRequester = favRequester
+                            if (visibleFavoriteChannels.isNotEmpty()) {
+                                selectedSection = LiveTvSection.Favorites
+                            }
+                        },
+                        onClick = { enterChannelsPane(LiveTvSection.Favorites) }
+                    )
                 }
 
                 // Pinned Virtual Section 2: Recently Watched
                 val isRecentsSelected = selectedSection is LiveTvSection.RecentlyWatched
-                val isRecentsTarget = isRecentsSelected || (selectedSection == null && visibleFavoriteChannels.isEmpty() && visibleRecentChannels.isNotEmpty())
-                if (settings.homeContentLanguages.isEmpty() || visibleRecentChannels.isNotEmpty()) {
-                    item {
-                        TvSidebarRailItem(
-                            title = "Recently Watched",
-                            icon = Icons.Default.History,
-                            iconTint = Color.White.copy(alpha = 0.8f),
-                            isSelected = isRecentsSelected,
-                            focusRequester = if (isRecentsTarget) firstItemFocusRequester else null,
-                            onMoveUp = if (visibleFavoriteChannels.isEmpty()) onMoveUpToTopBar else null,
-                            onMoveRight = {
-                                try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
-                            },
-                            onClick = { selectedSection = LiveTvSection.RecentlyWatched }
-                        )
-                    }
+                item {
+                    TvSidebarRailItem(
+                        title = "Recently Watched",
+                        icon = Icons.Default.History,
+                        iconTint = Color.White.copy(alpha = 0.8f),
+                        isSelected = isRecentsSelected,
+                        focusRequester = recentsRequester,
+                        rightFocusRequester = channelTargetRequester,
+                        onMoveUp = null,
+                        onFocused = {
+                            lastFocusedSidebarRequester = recentsRequester
+                            if (visibleRecentChannels.isNotEmpty()) {
+                                selectedSection = LiveTvSection.RecentlyWatched
+                            }
+                        },
+                        onClick = { enterChannelsPane(LiveTvSection.RecentlyWatched) }
+                    )
                 }
 
                 // Pinned Virtual Section 3: Recordings
@@ -401,31 +413,30 @@ fun TvLiveTvScreen(
                         icon = Icons.Default.Voicemail,
                         iconTint = Color.White.copy(alpha = 0.8f),
                         isSelected = false,
-                        onMoveRight = {
-                            try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
-                        },
+                        focusRequester = null,
+                        rightFocusRequester = channelTargetRequester,
+                        onMoveUp = null,
+                        onFocused = { },
                         onClick = { }
                     )
                 }
 
                 // Synced Playlist Categories
-                itemsIndexed(visibleCategories) { index, category ->
+                itemsIndexed(visibleCategories) { _, category ->
                     val isCatSelected = (selectedSection as? LiveTvSection.Category)?.category?.id == category.id
-                    val isFirstInRail = favoriteChannels.isEmpty() && recentChannels.isEmpty() && index == 0
-                    val isDefaultTarget = selectedSection == null && isFirstInRail
-                    val itemFocusRequester = if (isCatSelected || isDefaultTarget) {
-                        firstItemFocusRequester
-                    } else null
+                    val catRequester = categoryRequesters.getOrPut(category.id) { FocusRequester() }
 
                     TvSidebarRailItem(
                         title = category.name,
                         isSelected = isCatSelected,
-                        focusRequester = itemFocusRequester,
-                        onMoveUp = if (isFirstInRail && recentChannels.isEmpty() && favoriteChannels.isEmpty()) onMoveUpToTopBar else null,
-                        onMoveRight = {
-                            try { channelFirstFocusRequester.requestFocus() } catch (_: Exception) {}
+                        focusRequester = catRequester,
+                        rightFocusRequester = channelTargetRequester,
+                        onMoveUp = null,
+                        onFocused = {
+                            selectedSection = LiveTvSection.Category(category)
+                            lastFocusedSidebarRequester = catRequester
                         },
-                        onClick = { selectedSection = LiveTvSection.Category(category) }
+                        onClick = { enterChannelsPane(LiveTvSection.Category(category)) }
                     )
                 }
             }
@@ -445,7 +456,28 @@ fun TvLiveTvScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 if (displayChannels.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    val emptyBoxInteractionSource = remember { MutableInteractionSource() }
+                    val isEmptyFocused by emptyBoxInteractionSource.collectIsFocusedAsState()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusRequester(channelFirstFocusRequester)
+                            .focusable(interactionSource = emptyBoxInteractionSource)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(if (isEmptyFocused) Color.White.copy(alpha = 0.08f) else Color.Transparent)
+                            .border(
+                                width = if (isEmptyFocused) 2.dp else 0.dp,
+                                color = if (isEmptyFocused) LumeAccentBlue else Color.Transparent,
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .onPreviewKeyEvent { keyEvent ->
+                                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionLeft) {
+                                    restoreSidebarFocus()
+                                    true
+                                } else false
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -453,14 +485,19 @@ fun TvLiveTvScreen(
                             Icon(
                                 Icons.Default.Tv,
                                 contentDescription = null,
-                                tint = LumeTextSecondary,
+                                tint = if (isEmptyFocused) Color.White else LumeTextSecondary,
                                 modifier = Modifier.size(48.dp)
                             )
                             Text(
                                 text = "No Channels in this section",
-                                color = LumeTextSecondary,
+                                color = if (isEmptyFocused) Color.White else LumeTextSecondary,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Press Left to return to Categories",
+                                color = LumeTextSecondary.copy(alpha = 0.7f),
+                                fontSize = 13.sp
                             )
                         }
                     }
@@ -496,9 +533,15 @@ fun TvLiveTvScreen(
                                         focusedChannel = chan
                                         focusedProgram = null
                                     },
+                                    listState = channelListState,
                                     firstItemFocusRequester = channelFirstFocusRequester,
+                                    onFocusedRequester = { req ->
+                                        lastFocusedChannelRequester = req
+                                        TvFocusRescue.register(req)
+                                    },
+                                    onMoveLeftToSidebar = restoreSidebarFocus,
                                     onMoveUpToSwitcher = {
-                                        try { switcherFocusRequester.requestFocus() } catch (_: Exception) {}
+                                        onMoveUpToTopBar?.invoke()
                                     }
                                 )
                             } else {
@@ -513,12 +556,15 @@ fun TvLiveTvScreen(
                                     onOpenMenu = { chan -> selectedChannelForMenu = chan },
                                     onFocusChannel = { chan -> focusedChannel = chan },
                                     onFocusProgram = { prog -> focusedProgram = prog },
+                                    listState = guideListState,
                                     firstItemFocusRequester = channelFirstFocusRequester,
-                                    onMoveLeftToSidebar = {
-                                        try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
+                                    onFocusedRequester = { req ->
+                                        lastFocusedChannelRequester = req
+                                        TvFocusRescue.register(req)
                                     },
+                                    onMoveLeftToSidebar = restoreSidebarFocus,
                                     onMoveUpToSwitcher = {
-                                        try { switcherFocusRequester.requestFocus() } catch (_: Exception) {}
+                                        onMoveUpToTopBar?.invoke()
                                     }
                                 )
                             }
@@ -569,13 +615,20 @@ private fun TvSidebarRailItem(
     count: Int? = null,
     isSelected: Boolean,
     focusRequester: FocusRequester? = null,
+    rightFocusRequester: FocusRequester? = null,
     onMoveUp: (() -> Unit)? = null,
-    onMoveRight: (() -> Unit)? = null,
+    onFocused: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(targetValue = if (isFocused) 1.03f else 1.0f, label = "railItemScale")
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            onFocused?.invoke()
+        }
+    }
 
     val bgColor = when {
         isFocused -> Color.White.copy(alpha = 0.96f)
@@ -617,11 +670,9 @@ private fun TvSidebarRailItem(
                                 true
                             } else false
                         }
-                        Key.DirectionRight -> {
-                            if (onMoveRight != null) {
-                                onMoveRight()
-                                true
-                            } else false
+                        Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
+                            onClick()
+                            true
                         }
                         else -> false
                     }
@@ -798,10 +849,14 @@ private fun TvChannelsListView(
     onPlay: (ChannelEntity) -> Unit,
     onOpenMenu: (ChannelEntity) -> Unit,
     onFocusChannel: (ChannelEntity) -> Unit = {},
+    listState: LazyListState = rememberLazyListState(),
     firstItemFocusRequester: FocusRequester? = null,
+    onFocusedRequester: ((FocusRequester) -> Unit)? = null,
+    onMoveLeftToSidebar: (() -> Unit)? = null,
     onMoveUpToSwitcher: (() -> Unit)? = null
 ) {
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(top = 4.dp, bottom = 40.dp)
@@ -811,7 +866,8 @@ private fun TvChannelsListView(
                 TvClearRecentsButton(
                     onClear = onClearRecentlyWatched,
                     focusRequester = firstItemFocusRequester,
-                    onMoveUp = onMoveUpToSwitcher
+                    onMoveUp = onMoveUpToSwitcher,
+                    onMoveLeft = onMoveLeftToSidebar
                 )
             }
         }
@@ -819,14 +875,20 @@ private fun TvChannelsListView(
         itemsIndexed(channels) { index, channel ->
             val epg = epgDataMap[channel.id]
             val isFirstItem = index == 0 && !isRecentlyWatched
+            val cardRequester = remember { FocusRequester() }
+            val effectiveRequester = if (isFirstItem && firstItemFocusRequester != null) firstItemFocusRequester else cardRequester
             TvChannelListCard(
                 channel = channel,
                 epg = epg,
                 onPlay = { onPlay(channel) },
                 onOpenMenu = { onOpenMenu(channel) },
-                onFocused = { onFocusChannel(channel) },
-                focusRequester = if (isFirstItem) firstItemFocusRequester else null,
-                onMoveUp = if (isFirstItem) onMoveUpToSwitcher else null
+                onFocused = {
+                    onFocusChannel(channel)
+                    onFocusedRequester?.invoke(effectiveRequester)
+                },
+                focusRequester = effectiveRequester,
+                onMoveUp = if (isFirstItem) onMoveUpToSwitcher else null,
+                onMoveLeft = onMoveLeftToSidebar
             )
         }
     }
@@ -836,7 +898,8 @@ private fun TvChannelsListView(
 private fun TvClearRecentsButton(
     onClear: () -> Unit,
     focusRequester: FocusRequester? = null,
-    onMoveUp: (() -> Unit)? = null
+    onMoveUp: (() -> Unit)? = null,
+    onMoveLeft: (() -> Unit)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -855,11 +918,18 @@ private fun TvClearRecentsButton(
                 shape = RoundedCornerShape(12.dp)
             )
             .onPreviewKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
-                    if (onMoveUp != null) {
-                        onMoveUp()
-                        true
-                    } else false
+                if (keyEvent.type == KeyEventType.KeyDown) {
+                    when {
+                        keyEvent.key == Key.DirectionUp && onMoveUp != null -> {
+                            onMoveUp()
+                            true
+                        }
+                        keyEvent.key == Key.DirectionLeft && onMoveLeft != null -> {
+                            onMoveLeft()
+                            true
+                        }
+                        else -> false
+                    }
                 } else false
             }
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClear)
@@ -894,7 +964,8 @@ private fun TvChannelListCard(
     onOpenMenu: () -> Unit,
     onFocused: () -> Unit = {},
     focusRequester: FocusRequester? = null,
-    onMoveUp: (() -> Unit)? = null
+    onMoveUp: (() -> Unit)? = null,
+    onMoveLeft: (() -> Unit)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -921,6 +992,7 @@ private fun TvChannelListCard(
             .fillMaxWidth()
             .height(92.dp)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .focusable(interactionSource = interactionSource)
             .scale(scale)
             .clip(RoundedCornerShape(16.dp))
             .background(
@@ -947,27 +1019,37 @@ private fun TvChannelListCard(
                                 onMoveUp()
                                 true
                             }
-                            keyEvent.key == Key.Menu || keyEvent.key == Key.Help || keyEvent.key == Key.MediaPlayPause -> {
-                                onOpenMenu()
+                            keyEvent.key == Key.DirectionLeft && onMoveLeft != null -> {
+                                onMoveLeft()
                                 true
                             }
-                            keyEvent.key in listOf(Key.DirectionCenter, Key.Enter) -> {
+                            keyEvent.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter) -> {
                                 if (keyEvent.nativeKeyEvent.repeatCount >= 1) {
-                                    isLongPress = true
-                                    onOpenMenu()
+                                    if (!isLongPress) {
+                                        isLongPress = true
+                                        onOpenMenu()
+                                    }
                                     true
                                 } else {
                                     isLongPress = false
                                     false
                                 }
                             }
+                            keyEvent.key in listOf(Key.Menu, Key.Help, Key.MediaPlayPause) -> {
+                                onOpenMenu()
+                                true
+                            }
                             else -> false
                         }
                     }
                     KeyEventType.KeyUp -> {
-                        if (keyEvent.key in listOf(Key.DirectionCenter, Key.Enter) && isLongPress) {
-                            isLongPress = false
-                            true
+                        if (keyEvent.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter)) {
+                            if (isLongPress) {
+                                isLongPress = false
+                                true
+                            } else {
+                                false
+                            }
                         } else if (keyEvent.key in listOf(Key.Menu, Key.Help, Key.MediaPlayPause)) {
                             true
                         } else false
@@ -1653,7 +1735,9 @@ private fun TvEpgGuideView(
     onOpenMenu: (ChannelEntity) -> Unit,
     onFocusChannel: (ChannelEntity) -> Unit,
     onFocusProgram: (EpgListingEntity?) -> Unit,
+    listState: LazyListState = rememberLazyListState(),
     firstItemFocusRequester: FocusRequester? = null,
+    onFocusedRequester: ((FocusRequester) -> Unit)? = null,
     onMoveLeftToSidebar: (() -> Unit)? = null,
     onMoveUpToSwitcher: (() -> Unit)? = null
 ) {
@@ -1799,6 +1883,7 @@ private fun TvEpgGuideView(
                 .fillMaxWidth()
         ) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 contentPadding = PaddingValues(top = 2.dp, bottom = 6.dp)
@@ -1808,6 +1893,8 @@ private fun TvEpgGuideView(
                     val cells = remember(progs, timelineStart, timelineEnd) {
                         buildTimelineCells(channel, progs, timelineStart, timelineEnd, now)
                     }
+                    val badgeRequester = remember { FocusRequester() }
+                    val effectiveRequester = if (index == 0 && firstItemFocusRequester != null) firstItemFocusRequester else badgeRequester
 
                     Row(
                         modifier = Modifier
@@ -1824,8 +1911,9 @@ private fun TvEpgGuideView(
                             onFocused = {
                                 onFocusChannel(channel)
                                 onFocusProgram(null)
+                                onFocusedRequester?.invoke(effectiveRequester)
                             },
-                            focusRequester = if (index == 0) firstItemFocusRequester else null,
+                            focusRequester = effectiveRequester,
                             onMoveUp = if (index == 0) onMoveUpToSwitcher else null,
                             onMoveLeft = onMoveLeftToSidebar
                         )
@@ -1935,6 +2023,7 @@ private fun TvGuideChannelBadge(
         modifier = modifier
             .fillMaxHeight()
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .focusable(interactionSource = interactionSource)
             .scale(scale)
             .clip(RoundedCornerShape(9.dp))
             .background(if (isFocused) Color.White.copy(alpha = 0.96f) else Color.White.copy(alpha = 0.05f))
@@ -1955,27 +2044,33 @@ private fun TvGuideChannelBadge(
                                 onMoveLeft()
                                 true
                             }
-                            keyEvent.key == Key.Menu || keyEvent.key == Key.Help || keyEvent.key == Key.MediaPlayPause -> {
-                                onOpenMenu()
-                                true
-                            }
-                            keyEvent.key in listOf(Key.DirectionCenter, Key.Enter) -> {
+                            keyEvent.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter) -> {
                                 if (keyEvent.nativeKeyEvent.repeatCount >= 1) {
-                                    isLongPress = true
-                                    onOpenMenu()
+                                    if (!isLongPress) {
+                                        isLongPress = true
+                                        onOpenMenu()
+                                    }
                                     true
                                 } else {
                                     isLongPress = false
                                     false
                                 }
                             }
+                            keyEvent.key in listOf(Key.Menu, Key.Help, Key.MediaPlayPause) -> {
+                                onOpenMenu()
+                                true
+                            }
                             else -> false
                         }
                     }
                     KeyEventType.KeyUp -> {
-                        if (keyEvent.key in listOf(Key.DirectionCenter, Key.Enter) && isLongPress) {
-                            isLongPress = false
-                            true
+                        if (keyEvent.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter)) {
+                            if (isLongPress) {
+                                isLongPress = false
+                                true
+                            } else {
+                                false
+                            }
                         } else if (keyEvent.key in listOf(Key.Menu, Key.Help, Key.MediaPlayPause)) {
                             true
                         } else false
@@ -2104,27 +2199,33 @@ private fun TvEpgCellBlock(
                 when (keyEvent.type) {
                     KeyEventType.KeyDown -> {
                         when {
-                            keyEvent.key == Key.Menu || keyEvent.key == Key.Help || keyEvent.key == Key.MediaPlayPause -> {
-                                onOpenMenu()
-                                true
-                            }
-                            keyEvent.key in listOf(Key.DirectionCenter, Key.Enter) -> {
+                            keyEvent.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter) -> {
                                 if (keyEvent.nativeKeyEvent.repeatCount >= 1) {
-                                    isLongPress = true
-                                    onOpenMenu()
+                                    if (!isLongPress) {
+                                        isLongPress = true
+                                        onOpenMenu()
+                                    }
                                     true
                                 } else {
                                     isLongPress = false
                                     false
                                 }
                             }
+                            keyEvent.key in listOf(Key.Menu, Key.Help, Key.MediaPlayPause) -> {
+                                onOpenMenu()
+                                true
+                            }
                             else -> false
                         }
                     }
                     KeyEventType.KeyUp -> {
-                        if (keyEvent.key in listOf(Key.DirectionCenter, Key.Enter) && isLongPress) {
-                            isLongPress = false
-                            true
+                        if (keyEvent.key in listOf(Key.DirectionCenter, Key.Enter, Key.NumPadEnter)) {
+                            if (isLongPress) {
+                                isLongPress = false
+                                true
+                            } else {
+                                false
+                            }
                         } else if (keyEvent.key in listOf(Key.Menu, Key.Help, Key.MediaPlayPause)) {
                             true
                         } else false
