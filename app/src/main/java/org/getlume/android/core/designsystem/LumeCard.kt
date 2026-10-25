@@ -15,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
@@ -24,6 +26,7 @@ import androidx.compose.ui.unit.dp
 fun LumeCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {},
+    focusRequester: FocusRequester? = null,
     shape: Shape = RoundedCornerShape(12.dp),
     focusedScale: Float = 1.05f,
     elevation: Dp = 4.dp,
@@ -42,8 +45,11 @@ fun LumeCard(
 
     val surfaceColor = containerColor ?: if (isFocused) LumeSurfaceHighlight else LumeSurface
 
+    val focusModifier = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+
     Surface(
         modifier = modifier
+            .then(focusModifier)
             .scale(scale)
             .shadow(if (isFocused) elevation * 2 else elevation, shape)
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
