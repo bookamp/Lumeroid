@@ -41,13 +41,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.CategoryEntity
 import org.getlume.android.core.data.entities.MovieEntity
 import org.getlume.android.core.designsystem.*
 import org.getlume.android.core.player.PlayableMedia
 import org.getlume.android.core.player.toPlayableMedia
+import org.getlume.android.core.settings.AppSettings
 import org.getlume.android.core.sync.ContentSyncManager
 
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -64,6 +67,7 @@ fun TvMoviesScreen(
     onMoveUpToTopBar: (() -> Unit)? = null
 ) {
     val db = LumeApp.instance.database
+    val settings = remember { AppSettings.get() }
     val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
     val coroutineScope = rememberCoroutineScope()
 
@@ -86,10 +90,28 @@ fun TvMoviesScreen(
         onMoveUpToTopBar?.invoke()
     }
 
-    // Default to first category
-    LaunchedEffect(categories) {
-        if (selectedCategory == null && categories.isNotEmpty()) {
-            selectedCategory = categories.first()
+    // Filter categories based on active content languages (offloaded to background dispatcher)
+    val visibleCategories by produceState<List<CategoryEntity>>(
+        initialValue = categories,
+        categories,
+        settings.homeContentLanguages
+    ) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) {
+                categories
+            } else {
+                categories.filter { cat ->
+                    settings.matchesContentLanguage("", cat.name)
+                }
+            }
+        }
+    }
+
+    // Default to first visible category or retain valid selection
+    LaunchedEffect(visibleCategories) {
+        val currentCat = selectedCategory
+        if (currentCat == null || visibleCategories.none { it.id == currentCat.id }) {
+            selectedCategory = visibleCategories.firstOrNull()
         }
     }
 
@@ -103,17 +125,34 @@ fun TvMoviesScreen(
     }
 
     // Observe movies for the selected category
-    val moviesForCategory by if (selectedCategory != null) {
+    val rawMoviesForCategory by if (selectedCategory != null) {
         db.vodDao().getMoviesByCategory(activePlaylist?.id ?: "", selectedCategory!!.id).collectAsState(initial = emptyList())
     } else {
         db.vodDao().getMovies(activePlaylist?.id ?: "", 100).collectAsState(initial = emptyList())
+    }
+
+    val moviesForCategory by produceState<List<MovieEntity>>(
+        initialValue = rawMoviesForCategory,
+        rawMoviesForCategory,
+        settings.homeContentLanguages,
+        selectedCategory
+    ) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) {
+                rawMoviesForCategory
+            } else {
+                rawMoviesForCategory.filter { movie ->
+                    settings.matchesContentLanguage(movie.name, selectedCategory?.name ?: "")
+                }
+            }
+        }
     }
 
     // Auto-fetch movies for category if not yet cached in Room
     LaunchedEffect(selectedCategory) {
         val cat = selectedCategory
         val pl = activePlaylist
-        if (cat != null && pl != null && moviesForCategory.isEmpty()) {
+        if (cat != null && pl != null && rawMoviesForCategory.isEmpty()) {
             isLoadingCategory = true
             ContentSyncManager.loadCategoryMovies(pl, cat)
             isLoadingCategory = false
@@ -149,12 +188,16 @@ fun TvMoviesScreen(
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = LumeAccentBlue, modifier = Modifier.size(32.dp))
                     }
+                } else if (visibleCategories.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No matching categories", color = LumeTextSecondary, fontSize = 13.sp)
+                    }
                 } else {
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         contentPadding = PaddingValues(bottom = 24.dp)
                     ) {
-                        itemsIndexed(categories) { index, category ->
+                        itemsIndexed(visibleCategories) { index, category ->
                             val isSelected = selectedCategory?.id == category.id
                             val itemFocusRequester = if (isSelected || (selectedCategory == null && index == 0)) {
                                 firstItemFocusRequester

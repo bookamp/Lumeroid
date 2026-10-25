@@ -470,6 +470,166 @@ class AppSettings private constructor(context: Context) {
         get() = prefs.getInt("home_items_per_section", 10)
         set(value) = prefs.edit().putInt("home_items_per_section", value).apply()
 
+    @Volatile
+    private var cachedActiveLangs: Set<String>? = null
+    @Volatile
+    private var cachedActiveCodes: Set<String> = emptySet()
+    @Volatile
+    private var cachedActiveLangObjects: List<ContentLanguage> = emptyList()
+    @Volatile
+    private var cachedHasEnglish: Boolean = false
+
+    private fun getActiveLanguageFilterState(): Triple<Set<String>, List<ContentLanguage>, Boolean> {
+        val current = homeContentLanguages
+        val cached = cachedActiveLangs
+        if (cached != null && cached == current) {
+            return Triple(cachedActiveCodes, cachedActiveLangObjects, cachedHasEnglish)
+        }
+        val codes = mutableSetOf<String>()
+        val objs = mutableListOf<ContentLanguage>()
+        var hasEn = false
+        for (item in current) {
+            val lang = ContentLanguageCatalog.findByCode(item)
+            if (lang != null) {
+                codes.add(lang.code.lowercase())
+                objs.add(lang)
+                if (lang.code.equals("en", ignoreCase = true)) hasEn = true
+            } else {
+                codes.add(item.lowercase())
+                if (item.equals("en", ignoreCase = true) || item.equals("English", ignoreCase = true)) hasEn = true
+            }
+        }
+        cachedActiveLangs = current
+        cachedActiveCodes = codes
+        cachedActiveLangObjects = objs
+        cachedHasEnglish = hasEn
+        return Triple(codes, objs, hasEn)
+    }
+
+    var homeContentLanguages: Set<String>
+        get() = prefs.getStringSet("home_content_languages", emptySet()) ?: emptySet()
+        set(value) {
+            prefs.edit().putStringSet("home_content_languages", value).apply()
+            cachedActiveLangs = null
+            notifyChanged()
+        }
+
+    fun isHomeContentLanguageEnabled(codeOrName: String): Boolean {
+        val active = homeContentLanguages
+        if (active.isEmpty()) return false
+        val lang = ContentLanguageCatalog.findByCode(codeOrName)
+        return if (lang != null) {
+            active.any { it.equals(lang.code, ignoreCase = true) || it.equals(lang.displayName, ignoreCase = true) }
+        } else {
+            active.any { it.equals(codeOrName, ignoreCase = true) }
+        }
+    }
+
+    fun setHomeContentLanguageEnabled(codeOrName: String, isEnabled: Boolean) {
+        val current = homeContentLanguages.toMutableSet()
+        val lang = ContentLanguageCatalog.findByCode(codeOrName)
+        val code = lang?.code ?: codeOrName
+        val displayName = lang?.displayName
+
+        current.removeAll { it.equals(code, ignoreCase = true) || (displayName != null && it.equals(displayName, ignoreCase = true)) }
+
+        if (isEnabled) {
+            current.add(code)
+        }
+        homeContentLanguages = current
+    }
+
+    var contentLanguages: Set<String>
+        get() = homeContentLanguages
+        set(value) { homeContentLanguages = value }
+
+    fun isContentLanguageEnabled(codeOrName: String): Boolean = isHomeContentLanguageEnabled(codeOrName)
+
+    fun setContentLanguageEnabled(codeOrName: String, isEnabled: Boolean) = setHomeContentLanguageEnabled(codeOrName, isEnabled)
+
+    private val indianLanguageCodes = setOf("ta", "te", "ml", "kn", "hi", "pa", "bn", "gu", "mr")
+
+    /**
+     * Determines whether a title and/or its category belongs to the active content languages.
+     * Evaluates dynamically against ContentLanguageCatalog and active language multi-selections.
+     * Optimized for zero-allocation fast paths and high-throughput background filtering.
+     * If nothing is selected, represents "show everything" (unfiltered).
+     */
+    fun matchesContentLanguage(title: String, categoryName: String = ""): Boolean {
+        val (activeCodes, activeLangObjects, hasEnglish) = getActiveLanguageFilterState()
+        if (activeCodes.isEmpty()) {
+            return true
+        }
+
+        val upperTitle = title.uppercase().trim()
+        val upperCat = categoryName.uppercase().trim()
+
+        // 1. Authoritative prefix match (e.g. "AR - ", "TAM - ", "TM - ", "FR - ", "EN - ", "TAM: ", "UK - ")
+        if (upperTitle.isNotEmpty()) {
+            val prefixLang = ContentLanguageCatalog.findPrefixLanguage(upperTitle)
+            if (prefixLang != null) {
+                return activeCodes.contains(prefixLang.code.lowercase())
+            }
+        }
+
+        // 2. Category-only check (when checking if a category container should be visible, title is empty)
+        if (upperTitle.isEmpty() && upperCat.isNotEmpty()) {
+            for (i in activeLangObjects.indices) {
+                if (activeLangObjects[i].matches(upperTitle, upperCat)) {
+                    return true
+                }
+            }
+            // For Indian regional languages (Tamil, Telugu, Malayalam, etc.):
+            // IPTV providers store Indian movies/series in broad regional containers like "VOD - INDIA", "SRS - INDIA".
+            // Allow these container categories so their items can be accessed.
+            if (activeCodes.any { it in indianLanguageCodes }) {
+                if (upperCat.contains("INDIA") || upperCat.contains("SOUTH")) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        // 3. Direct match against active languages
+        for (i in activeLangObjects.indices) {
+            if (activeLangObjects[i].matches(upperTitle, upperCat)) {
+                // If the only active language that matched is English, check if there is an explicit foreign match overriding loose English
+                if (activeLangObjects[i].code == "en" && activeLangObjects.size == 1) {
+                    val englishMatchIsStrict = upperTitle.contains("ENGLISH") ||
+                        upperTitle.contains("|EN|") || upperTitle.contains("[EN]") ||
+                        upperTitle.contains("(EN)") || upperTitle.startsWith("EN ") ||
+                        upperTitle.contains("DUAL") || upperTitle.contains("MULTI")
+                    if (!englishMatchIsStrict) {
+                        val hasForeign = ContentLanguageCatalog.allLanguages.any { lang ->
+                            lang.code != "en" && lang.matches(upperTitle, upperCat)
+                        }
+                        if (hasForeign) {
+                            return false
+                        }
+                    }
+                }
+                return true
+            }
+        }
+
+        // 4. Fallback for untagged content (only when English is among selected languages)
+        if (hasEnglish) {
+            val hasForeign = ContentLanguageCatalog.allLanguages.any { lang ->
+                lang.code != "en" && lang.matches(upperTitle, upperCat)
+            }
+            if (!hasForeign) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /** Alias for Home screen callers */
+    fun matchesHomeLanguage(title: String, categoryName: String = ""): Boolean =
+        matchesContentLanguage(title, categoryName)
+
+
     var exoPlayerProbeSizeMb: Int
         get() = prefs.getInt("exoplayer_probe_size_mb", 0)
         set(value) = prefs.edit().putInt("exoplayer_probe_size_mb", value).apply()

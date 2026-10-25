@@ -51,9 +51,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
+import org.getlume.android.core.data.entities.CategoryEntity
 import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.data.entities.MovieEntity
 import org.getlume.android.core.data.entities.SeriesEntity
@@ -107,17 +110,81 @@ fun TvHomeScreen(
     val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
     val playlistId = activePlaylist?.id ?: ""
 
+    // Observe categories to map categoryId -> categoryName for language matching
+    val categories by db.categoryDao().observeCategories(playlistId).collectAsState(initial = emptyList())
+    val categoryMap = remember(categories) { categories.associate { it.id to it.name } }
+
     // Observe real content from active IPTV connection
     val channels by db.channelDao().observeChannelsByPlaylist(playlistId).collectAsState(initial = emptyList())
-    val featuredMovies by db.vodDao().getFeaturedMovies(playlistId, 10).collectAsState(initial = emptyList())
-    val featuredSeries by db.vodDao().getFeaturedSeries(playlistId, 10).collectAsState(initial = emptyList())
-    val movies by db.vodDao().getMovies(playlistId, 40).collectAsState(initial = emptyList())
-    val seriesList by db.vodDao().getSeries(playlistId, 40).collectAsState(initial = emptyList())
+    val featuredMovies by db.vodDao().getFeaturedMovies(playlistId, 40).collectAsState(initial = emptyList())
+    val featuredSeries by db.vodDao().getFeaturedSeries(playlistId, 40).collectAsState(initial = emptyList())
+    val movies by db.vodDao().getMovies(playlistId, 100).collectAsState(initial = emptyList())
+    val seriesList by db.vodDao().getSeries(playlistId, 100).collectAsState(initial = emptyList())
     val favoriteChannels by db.channelDao().getFavoriteChannels(playlistId).collectAsState(initial = emptyList())
     val favoriteMovies by db.vodDao().getFavoriteMovies(playlistId).collectAsState(initial = emptyList())
     val activeProfile by db.profileDao().observeActiveProfile().collectAsState(initial = null)
     val activeProfileId = activeProfile?.id ?: "default"
     val continueWatching by db.watchProgressDao().getContinueWatching(activeProfileId).collectAsState(initial = emptyList())
+
+    // Content filtered by active Home Content Languages (English, Tamil, Hindi) - offloaded to background dispatcher
+    val filteredMovies by produceState(emptyList<MovieEntity>(), movies, categoryMap, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) movies
+            else movies.filter { settings.matchesHomeLanguage(it.name, categoryMap[it.categoryId] ?: "") }
+        }
+    }
+    val filteredSeries by produceState(emptyList<SeriesEntity>(), seriesList, categoryMap, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) seriesList
+            else seriesList.filter { settings.matchesHomeLanguage(it.name, categoryMap[it.categoryId] ?: "") }
+        }
+    }
+    val filteredFeaturedMovies by produceState(emptyList<MovieEntity>(), featuredMovies, categoryMap, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) featuredMovies
+            else featuredMovies.filter { settings.matchesHomeLanguage(it.name, categoryMap[it.categoryId] ?: "") }
+        }
+    }
+    val filteredFeaturedSeries by produceState(emptyList<SeriesEntity>(), featuredSeries, categoryMap, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) featuredSeries
+            else featuredSeries.filter { settings.matchesHomeLanguage(it.name, categoryMap[it.categoryId] ?: "") }
+        }
+    }
+    val filteredChannels by produceState(emptyList<ChannelEntity>(), channels, categoryMap, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) {
+                channels.take(100)
+            } else {
+                val matched = ArrayList<ChannelEntity>(100)
+                for (chan in channels) {
+                    if (settings.matchesHomeLanguage(chan.name, categoryMap[chan.categoryId] ?: "")) {
+                        matched.add(chan)
+                        if (matched.size >= 100) break
+                    }
+                }
+                matched
+            }
+        }
+    }
+    val filteredFavoriteChannels by produceState(emptyList<ChannelEntity>(), favoriteChannels, categoryMap, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) favoriteChannels
+            else favoriteChannels.filter { settings.matchesHomeLanguage(it.name, categoryMap[it.categoryId] ?: "") }
+        }
+    }
+    val filteredFavoriteMovies by produceState(emptyList<MovieEntity>(), favoriteMovies, categoryMap, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) favoriteMovies
+            else favoriteMovies.filter { settings.matchesHomeLanguage(it.name, categoryMap[it.categoryId] ?: "") }
+        }
+    }
+    val filteredContinueWatching by produceState(emptyList<WatchProgressEntity>(), continueWatching, revision) {
+        value = withContext(Dispatchers.Default) {
+            if (settings.homeContentLanguages.isEmpty()) continueWatching
+            else continueWatching.filter { settings.matchesHomeLanguage(it.title) }
+        }
+    }
 
     // Detail Modal Sheet State
     var selectedMovie by remember { mutableStateOf<MovieEntity?>(null) }
@@ -143,12 +210,12 @@ fun TvHomeScreen(
     }
 
     // Dynamic hero slides constructed strictly from real IPTV content, matching matchTrending in HomeView+Trending.swift
-    val heroSlides = remember(featuredMovies, featuredSeries, channels) {
+    val heroSlides = remember(filteredFeaturedMovies, filteredFeaturedSeries, filteredChannels) {
         val items = mutableListOf<DynamicHeroItem>()
-        val maxCount = maxOf(featuredMovies.size, featuredSeries.size)
+        val maxCount = maxOf(filteredFeaturedMovies.size, filteredFeaturedSeries.size)
         for (i in 0 until maxCount) {
-            if (i < featuredMovies.size) {
-                val movie = featuredMovies[i]
+            if (i < filteredFeaturedMovies.size) {
+                val movie = filteredFeaturedMovies[i]
                 items.add(
                     DynamicHeroItem(
                         id = "movie-${movie.id}",
@@ -162,8 +229,8 @@ fun TvHomeScreen(
                     )
                 )
             }
-            if (i < featuredSeries.size) {
-                val series = featuredSeries[i]
+            if (i < filteredFeaturedSeries.size) {
+                val series = filteredFeaturedSeries[i]
                 items.add(
                     DynamicHeroItem(
                         id = "series-${series.id}",
@@ -179,8 +246,8 @@ fun TvHomeScreen(
             }
         }
         // Fall back to live channels if no movies/series exist yet
-        if (items.isEmpty() && channels.isNotEmpty()) {
-            channels.take(4).forEach { chan ->
+        if (items.isEmpty() && filteredChannels.isNotEmpty()) {
+            filteredChannels.take(4).forEach { chan ->
                 items.add(
                     DynamicHeroItem(
                         id = "channel-${chan.id}",
@@ -256,11 +323,11 @@ fun TvHomeScreen(
     var seriesFocusedIndex by remember { mutableIntStateOf(0) }
     var channelsFocusedIndex by remember { mutableIntStateOf(0) }
 
-    val showCw = settings.isHomeSectionEnabled("recentlyWatched") && settings.homeShowContinueWatching && continueWatching.isNotEmpty()
-    val showFav = settings.isHomeSectionEnabled("favorites") && (favoriteChannels.isNotEmpty() || favoriteMovies.isNotEmpty())
-    val showMovies = settings.isHomeSectionEnabled("trendingMovies") && settings.isPlaylistTabVisible(playlistId, "movies") && movies.isNotEmpty()
-    val showSeries = settings.isHomeSectionEnabled("trendingSeries") && settings.isPlaylistTabVisible(playlistId, "series") && seriesList.isNotEmpty()
-    val showChannels = settings.isHomeSectionEnabled("liveTv") && settings.isPlaylistTabVisible(playlistId, "livetv") && channels.isNotEmpty()
+    val showCw = settings.isHomeSectionEnabled("recentlyWatched") && settings.homeShowContinueWatching && filteredContinueWatching.isNotEmpty()
+    val showFav = settings.isHomeSectionEnabled("favorites") && (filteredFavoriteChannels.isNotEmpty() || filteredFavoriteMovies.isNotEmpty())
+    val showMovies = settings.isHomeSectionEnabled("trendingMovies") && settings.isPlaylistTabVisible(playlistId, "movies") && filteredMovies.isNotEmpty()
+    val showSeries = settings.isHomeSectionEnabled("trendingSeries") && settings.isPlaylistTabVisible(playlistId, "series") && filteredSeries.isNotEmpty()
+    val showChannels = settings.isHomeSectionEnabled("liveTv") && settings.isPlaylistTabVisible(playlistId, "livetv") && filteredChannels.isNotEmpty()
 
     val scrollToHeroAndFocus: () -> Unit = {
         homeCoroutineScope.launch {
@@ -354,11 +421,14 @@ fun TvHomeScreen(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF090B10))
     ) {
+        val screenHeight = maxHeight
+        val heroSlotHeight = (screenHeight - 198.dp).coerceIn(340.dp, 480.dp)
+
         // FIXED FULL-BLEED BACKDROP ARTWORK SOURCED FROM ACTIVE IPTV CONTENT
         if (currentHero != null) {
             val artworkUrl = currentHero.backdropUrl.ifBlank { currentHero.posterUrl }
@@ -385,18 +455,18 @@ fun TvHomeScreen(
             }
         }
 
-        // Frosted Gradient Scrims: Authentic Apple TV vignette
+        // Frosted Gradient Scrims: Authentic Apple TV vignette (translucent bottom to keep backdrop visible)
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         colorStops = arrayOf(
-                            0.0f to Color.Black.copy(alpha = 0.55f),
-                            0.35f to Color.Transparent,
-                            0.60f to Color.Black.copy(alpha = 0.50f),
-                            0.82f to Color(0xFF090B10).copy(alpha = 0.90f),
-                            1.0f to Color(0xFF090B10)
+                            0.0f to Color.Black.copy(alpha = 0.60f),
+                            0.30f to Color.Transparent,
+                            0.60f to Color.Black.copy(alpha = 0.40f),
+                            0.85f to Color(0xFF090B10).copy(alpha = 0.75f),
+                            1.0f to Color(0xFF090B10).copy(alpha = 0.85f)
                         )
                     )
                 )
@@ -408,9 +478,9 @@ fun TvHomeScreen(
                 .background(
                     Brush.horizontalGradient(
                         colorStops = arrayOf(
-                            0.0f to Color.Black.copy(alpha = 0.85f),
-                            0.45f to Color.Black.copy(alpha = 0.40f),
-                            0.80f to Color.Transparent
+                            0.0f to Color.Black.copy(alpha = 0.80f),
+                            0.45f to Color.Black.copy(alpha = 0.35f),
+                            0.85f to Color.Transparent
                         )
                     )
                 )
@@ -422,7 +492,7 @@ fun TvHomeScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(56.dp),
+                    .padding(64.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -457,14 +527,14 @@ fun TvHomeScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(440.dp)
-                            .padding(top = 40.dp, start = 56.dp, end = 56.dp, bottom = 12.dp)
+                            .height(heroSlotHeight)
+                            .padding(top = 56.dp, start = 64.dp, end = 64.dp, bottom = 14.dp)
                             .bringIntoViewResponder(noOpBringIntoView),
                         contentAlignment = Alignment.BottomStart
                     ) {
                         Column(
-                            modifier = Modifier.width(680.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                            modifier = Modifier.widthIn(max = 620.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             // Rating Badge
                             Row(
@@ -482,10 +552,10 @@ fun TvHomeScreen(
                                             .clip(RoundedCornerShape(4.dp))
                                             .background(Color(0xFFFF3B30))
                                     )
-                                    Text("LIVE", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text("LIVE", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 } else {
-                                    Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(13.dp))
-                                    Text(currentHero.rating, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(12.dp))
+                                    Text(currentHero.rating, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
 
@@ -493,9 +563,9 @@ fun TvHomeScreen(
                             Text(
                                 text = currentHero.title,
                                 color = Color.White,
-                                fontSize = 42.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                lineHeight = 48.sp,
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.Bold,
+                                lineHeight = 38.sp,
                                 letterSpacing = (-0.5).sp,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
@@ -505,8 +575,8 @@ fun TvHomeScreen(
                             Text(
                                 text = currentHero.overview,
                                 color = Color.White.copy(alpha = 0.85f),
-                                fontSize = 15.sp,
-                                lineHeight = 22.sp,
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -546,7 +616,7 @@ fun TvHomeScreen(
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(2.dp))
 
                             // Carousel Dots Indicator (━ • • •)
                             if (heroSlides.size > 1) {
@@ -563,18 +633,18 @@ fun TvHomeScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 10.dp, bottom = 48.dp),
-                    verticalArrangement = Arrangement.spacedBy(36.dp)
+                        .padding(top = 8.dp, bottom = 48.dp),
+                    verticalArrangement = Arrangement.spacedBy(28.dp)
                 ) {
-                    // Rail 1: Recently Watched (Continue Watching with progress bar)
+                    // Rail 1: Recently Watched (Continue Watching with squarish cards)
                     if (showCw) {
                         TvContentRail(
                             title = "Recently Watched"
                         ) {
-                            val itemsToShow = continueWatching.take(settings.homeItemsPerSection)
+                            val itemsToShow = filteredContinueWatching.take(settings.homeItemsPerSection)
                             LazyRow(
                                 state = cwListState,
-                                contentPadding = PaddingValues(horizontal = 56.dp),
+                                contentPadding = PaddingValues(horizontal = 64.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -586,13 +656,14 @@ fun TvHomeScreen(
                                         onFocused = { cwFocusedIndex = index },
                                         onMoveUp = moveUpFromCw,
                                         onClick = {
+                                            val isLive = item.contentType == "channel" || item.durationMs <= 0
                                             val media = PlayableMedia(
                                                 id = item.contentId,
                                                 title = item.title,
                                                 streamUrl = "", // looked up during playback
                                                 posterUrl = item.posterUrl,
-                                                isLive = false,
-                                                startPositionMs = item.positionMs
+                                                isLive = isLive,
+                                                startPositionMs = if (isLive) 0L else item.positionMs
                                             )
                                             onPlayMedia(media)
                                         }
@@ -607,14 +678,14 @@ fun TvHomeScreen(
                         TvContentRail(
                             title = "Favorites"
                         ) {
-                            val chanItems = favoriteChannels.take(settings.homeItemsPerSection)
-                            val favMovieItems = favoriteMovies.take(settings.homeItemsPerSection)
+                            val chanItems = filteredFavoriteChannels.take(settings.homeItemsPerSection)
+                            val favMovieItems = filteredFavoriteMovies.take(settings.homeItemsPerSection)
                             val hasSeeAll = true
                             val totalFavItems = chanItems.size + favMovieItems.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
                                 state = favListState,
-                                contentPadding = PaddingValues(horizontal = 56.dp),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                contentPadding = PaddingValues(horizontal = 64.dp),
+                                horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 itemsIndexed(chanItems) { index, channel ->
@@ -645,7 +716,7 @@ fun TvHomeScreen(
                                         TvSeeAllRailCard(
                                             title = "See All",
                                             subtitle = "Favorites",
-                                            modifier = Modifier.width(if (favMovieItems.isNotEmpty()) 150.dp else 180.dp),
+                                            modifier = Modifier.width(if (favMovieItems.isNotEmpty()) 150.dp else 170.dp),
                                             cardModifier = if (favMovieItems.isNotEmpty()) Modifier.fillMaxWidth().aspectRatio(2f / 3f) else Modifier.fillMaxWidth().height(110.dp),
                                             focusRequester = cardFocusRequester,
                                             onFocused = { favFocusedIndex = seeAllIndex },
@@ -663,12 +734,12 @@ fun TvHomeScreen(
                         TvContentRail(
                             title = "Trending Movies"
                         ) {
-                            val itemsToShow = movies.take(settings.homeItemsPerSection)
+                            val itemsToShow = filteredMovies.take(settings.homeItemsPerSection)
                             val hasSeeAll = true
                             val totalMovieItems = itemsToShow.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
                                 state = moviesListState,
-                                contentPadding = PaddingValues(horizontal = 56.dp),
+                                contentPadding = PaddingValues(horizontal = 64.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -707,12 +778,12 @@ fun TvHomeScreen(
                         TvContentRail(
                             title = "Popular Series"
                         ) {
-                            val itemsToShow = seriesList.take(settings.homeItemsPerSection)
+                            val itemsToShow = filteredSeries.take(settings.homeItemsPerSection)
                             val hasSeeAll = true
                             val totalSeriesItems = itemsToShow.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
                                 state = seriesListState,
-                                contentPadding = PaddingValues(horizontal = 56.dp),
+                                contentPadding = PaddingValues(horizontal = 64.dp),
                                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -751,13 +822,13 @@ fun TvHomeScreen(
                         TvContentRail(
                             title = "On Air Now"
                         ) {
-                            val itemsToShow = channels.take(settings.homeItemsPerSection.coerceAtLeast(10))
+                            val itemsToShow = filteredChannels.take(settings.homeItemsPerSection.coerceAtLeast(10))
                             val hasSeeAll = true
                             val totalChannelItems = itemsToShow.size + (if (hasSeeAll) 1 else 0)
                             LazyRow(
                                 state = channelsListState,
-                                contentPadding = PaddingValues(horizontal = 56.dp),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                contentPadding = PaddingValues(horizontal = 64.dp),
+                                horizontalArrangement = Arrangement.spacedBy(20.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 itemsIndexed(itemsToShow) { index, channel ->
@@ -777,7 +848,7 @@ fun TvHomeScreen(
                                         TvSeeAllRailCard(
                                             title = "See All",
                                             subtitle = "Channels",
-                                            modifier = Modifier.width(180.dp),
+                                            modifier = Modifier.width(170.dp),
                                             cardModifier = Modifier.fillMaxWidth().height(110.dp),
                                             focusRequester = cardFocusRequester,
                                             onFocused = { channelsFocusedIndex = seeAllIndex },
@@ -827,7 +898,7 @@ private fun TvContentRail(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 56.dp),
+                .padding(horizontal = 64.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -998,10 +1069,10 @@ private fun TvLiveChannelRailCard(
                 .fillMaxWidth()
                 .height(110.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(if (isFocused) Color.White else Color(0xFF161A24))
+                .background(if (isFocused) Color(0xFF242A38) else Color(0xFF161A24))
                 .border(
                     width = if (isFocused) 2.5.dp else 1.dp,
-                    color = if (isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.10f),
+                    color = if (isFocused) Color.White else Color.White.copy(alpha = 0.12f),
                     shape = RoundedCornerShape(14.dp)
                 )
                 .padding(14.dp),
@@ -1016,8 +1087,8 @@ private fun TvLiveChannelRailCard(
                 )
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Tv, contentDescription = null, tint = if (isFocused) Color.Black else Color.White, modifier = Modifier.size(28.dp))
-                    Text("CH ${channel.channelNumber}", color = if (isFocused) Color.Black else LumeTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Default.Tv, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
+                    Text("CH ${channel.channelNumber}", color = LumeTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -1229,7 +1300,10 @@ private fun TvContinueWatchingRailCard(
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f, label = "cwScale")
-    val progressFraction = if (item.durationMs > 0) (item.positionMs.toFloat() / item.durationMs.toFloat()).coerceIn(0f, 1f) else 0.5f
+    val isLive = item.contentType == "channel" || item.durationMs <= 0
+    val progressFraction = if (!isLive && item.durationMs > 0) {
+        (item.positionMs.toFloat() / item.durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
 
     LaunchedEffect(isFocused) {
         if (isFocused) {
@@ -1239,7 +1313,7 @@ private fun TvContinueWatchingRailCard(
 
     Column(
         modifier = Modifier
-            .width(200.dp)
+            .width(170.dp)
             .scale(scale)
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { keyEvent ->
@@ -1256,9 +1330,9 @@ private fun TvContinueWatchingRailCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(118.dp)
+                .height(210.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(Color(0xFF161A24))
+                .background(if (isFocused) Color(0xFF242A38) else Color(0xFF161A24))
                 .border(
                     width = if (isFocused) 2.5.dp else 1.dp,
                     color = if (isFocused) Color.White else Color.White.copy(alpha = 0.12f),
@@ -1266,28 +1340,62 @@ private fun TvContinueWatchingRailCard(
                 )
         ) {
             if (item.posterUrl.isNotBlank()) {
-                AsyncImage(
-                    model = item.posterUrl,
-                    contentDescription = item.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (isLive) {
+                    // Live channel logo centered with comfortable margin
+                    AsyncImage(
+                        model = item.posterUrl,
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp)
+                    )
+                } else {
+                    // Movie/Series poster cropped to fill
+                    AsyncImage(
+                        model = item.posterUrl,
+                        contentDescription = item.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             } else {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(36.dp))
+                    Icon(
+                        imageVector = if (isLive) Icons.Default.Tv else Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.5f),
+                        modifier = Modifier.size(36.dp)
+                    )
                 }
             }
 
-            // Apple TV linear resume bar at bottom
-            LinearProgressIndicator(
-                progress = { progressFraction },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .align(Alignment.BottomCenter),
-                color = LumeAccentBlue,
-                trackColor = Color.White.copy(alpha = 0.25f)
-            )
+            // Only show progress bar for movies/episodes with duration, NEVER on live channels
+            if (!isLive && progressFraction > 0f) {
+                LinearProgressIndicator(
+                    progress = { progressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .align(Alignment.BottomCenter),
+                    color = LumeAccentBlue,
+                    trackColor = Color.White.copy(alpha = 0.25f)
+                )
+            }
+
+            // Red LIVE badge for live channels
+            if (isLive) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFFFF3B30))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text("LIVE", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+            }
         }
 
         Text(
