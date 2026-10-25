@@ -1,11 +1,16 @@
 package org.getlume.android.core.sync
 
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -31,6 +36,7 @@ object PlaylistSyncManager {
     private const val TAG = "PlaylistSyncManager"
 
     private val syncMutex = Mutex()
+    private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
@@ -42,12 +48,23 @@ object PlaylistSyncManager {
     val syncProgressMessage: StateFlow<String?> = _syncProgressMessage.asStateFlow()
 
     /**
+     * Non-cancellable asynchronous trigger for UI components.
+     * Prevents sync from being aborted if the calling Composable unmounts.
+     */
+    fun syncPlaylistAsync(
+        playlist: PlaylistEntity,
+        onProgress: ((String) -> Unit)? = null
+    ): Job = syncScope.launch {
+        syncPlaylist(playlist, onProgress)
+    }
+
+    /**
      * Synchronizes a single playlist (Live Channels, Categories, and VOD if Xtream).
      */
     suspend fun syncPlaylist(
         playlist: PlaylistEntity,
         onProgress: ((String) -> Unit)? = null
-    ): Result<Int> = withContext(Dispatchers.IO) {
+    ): Result<Int> = withContext(NonCancellable) {
         if (!syncMutex.tryLock()) {
             return@withContext Result.failure(IllegalStateException("Sync already in progress"))
         }
@@ -64,6 +81,12 @@ object PlaylistSyncManager {
 
         try {
             var totalItems = 0
+            // Purge orphaned items from deleted playlists
+            db.channelDao().deleteOrphanedChannels()
+            db.categoryDao().deleteOrphanedCategories()
+            db.vodDao().deleteOrphanedMovies()
+            db.vodDao().deleteOrphanedSeries()
+
             if (playlist.type.equals("xtream", ignoreCase = true)) {
                 val client = XtreamCodesClient(playlist.serverUrl, playlist.username, playlist.password)
 
@@ -79,16 +102,32 @@ object PlaylistSyncManager {
                 updateProgress("Syncing movies…")
                 val vodCats = client.fetchVodCategories(playlist.id)
                 val vodStreams = client.fetchVodStreams(playlist.id)
-                if (vodCats.isNotEmpty()) db.categoryDao().insertCategories(vodCats)
-                if (vodStreams.isNotEmpty()) db.vodDao().insertMovies(vodStreams)
+                if (vodCats.isNotEmpty() || vodStreams.isNotEmpty()) {
+                    db.categoryDao().deleteCategories(playlist.id, "vod")
+                    if (vodCats.isNotEmpty()) db.categoryDao().insertCategories(vodCats)
+                    db.vodDao().deleteMoviesForPlaylist(playlist.id)
+                    if (vodStreams.isNotEmpty()) {
+                        vodStreams.chunked(1000).forEach { batch ->
+                            db.vodDao().insertMovies(batch)
+                        }
+                    }
+                }
                 totalItems += vodStreams.size
 
                 // 3. TV Series & Categories
                 updateProgress("Syncing series…")
                 val seriesCats = client.fetchSeriesCategories(playlist.id)
                 val seriesList = client.fetchSeries(playlist.id)
-                if (seriesCats.isNotEmpty()) db.categoryDao().insertCategories(seriesCats)
-                if (seriesList.isNotEmpty()) db.vodDao().insertSeries(seriesList)
+                if (seriesCats.isNotEmpty() || seriesList.isNotEmpty()) {
+                    db.categoryDao().deleteCategories(playlist.id, "series")
+                    if (seriesCats.isNotEmpty()) db.categoryDao().insertCategories(seriesCats)
+                    db.vodDao().deleteSeriesForPlaylist(playlist.id)
+                    if (seriesList.isNotEmpty()) {
+                        seriesList.chunked(1000).forEach { batch ->
+                            db.vodDao().insertSeries(batch)
+                        }
+                    }
+                }
                 totalItems += seriesList.size
 
             } else {
@@ -119,6 +158,9 @@ object PlaylistSyncManager {
             // Update timestamp
             val now = System.currentTimeMillis()
             db.playlistDao().updateLastSyncDate(playlist.id, now)
+            org.getlume.android.core.settings.ContentFilterCache.rebuildAsync(playlist.id)
+            HomeTrendingManager.clearCache()
+            HomeTrendingManager.loadTrending(playlist.id)
             updateProgress("Sync completed ($totalItems items)")
 
             Result.success(totalItems)
@@ -169,8 +211,15 @@ object PlaylistSyncManager {
         val frequency = settings.playlistSyncFrequency
         val isDue = frequency.isDue(activePlaylist.lastSyncDate)
 
-        if (isDue) {
-            Log.i(TAG, "AutoSync triggered for ${activePlaylist.name} (interval: ${frequency.title})")
+        val movieCount = db.vodDao().getMovieCount(activePlaylist.id)
+        val tmdbMovieCount = db.vodDao().getTmdbMappedCount(activePlaylist.id)
+        val seriesCount = db.vodDao().getSeriesCount(activePlaylist.id)
+        val tmdbSeriesCount = db.vodDao().getSeriesTmdbMappedCount(activePlaylist.id)
+        val needsTmdbBackfill = (movieCount > 0 && tmdbMovieCount < (movieCount / 2)) ||
+                                (seriesCount > 0 && tmdbSeriesCount < (seriesCount / 2))
+
+        if (isDue || needsTmdbBackfill) {
+            Log.i(TAG, "AutoSync triggered for ${activePlaylist.name} (interval: ${frequency.title}, isDue=$isDue, needsTmdbBackfill=$needsTmdbBackfill, movies=$tmdbMovieCount/$movieCount, series=$tmdbSeriesCount/$seriesCount)")
             syncPlaylist(activePlaylist)
         } else {
             Log.d(TAG, "AutoSync not due for ${activePlaylist.name} (last: ${formatLastSync(activePlaylist.lastSyncDate)})")
