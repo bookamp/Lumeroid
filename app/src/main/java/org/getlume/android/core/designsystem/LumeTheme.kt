@@ -1,9 +1,12 @@
 package org.getlume.android.core.designsystem
 
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 
 val LumeBackground = Color(0xFF0A0A0C)
@@ -35,12 +38,17 @@ private val LumeColorScheme = darkColorScheme(
     outline = LumeBorder
 )
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LumeTheme(
     content: @Composable () -> Unit
 ) {
-    MaterialTheme(
-        colorScheme = LumeColorScheme,
-        content = content
-    )
+    CompositionLocalProvider(
+        LocalBringIntoViewSpec provides remember { TvSmoothBringIntoViewSpec() }
+    ) {
+        MaterialTheme(
+            colorScheme = LumeColorScheme,
+            content = content
+        )
+    }
 }

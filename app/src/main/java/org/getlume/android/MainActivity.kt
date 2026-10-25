@@ -144,4 +144,30 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val handled = super.dispatchKeyEvent(event)
+        if (!handled && event.action == android.view.KeyEvent.ACTION_DOWN) {
+            // Only attempt focus rescue if the window has ACTUALLY lost focus completely.
+            // When an element is focused and reaches a screen boundary, hitting D-pad UP/DOWN/LEFT/RIGHT
+            // must NEVER steal or rescue focus to another element.
+            val hasFocus = currentFocus != null && currentFocus?.hasFocus() == true
+            if (!hasFocus) {
+                when (event.keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_UP,
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                    android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent.KEYCODE_BACK -> {
+                        val rescued = org.getlume.android.core.designsystem.TvFocusRescue.rescueFocus()
+                        if (rescued) return true
+                    }
+                }
+            }
+        }
+        return handled
+    }
+
 }

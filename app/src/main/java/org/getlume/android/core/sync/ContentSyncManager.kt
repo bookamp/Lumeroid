@@ -48,6 +48,7 @@ object ContentSyncManager {
 
         _syncProgress.value = "Categories up to date"
         _isSyncing.value = false
+        org.getlume.android.core.settings.ContentFilterCache.rebuildAsync(playlist.id)
     }
 
     suspend fun syncInitialCatalog(playlist: PlaylistEntity) = withContext(Dispatchers.IO) {
@@ -57,35 +58,48 @@ object ContentSyncManager {
 
         _isSyncing.value = true
         try {
+            android.util.Log.d("ContentSyncManager", "Starting initial sync for ${playlist.name} (${playlist.id})...")
             // First ensure categories exist
             syncAllCategories(playlist)
 
-            // Seed initial movies (first 3 VOD categories or top streams)
-            _syncProgress.value = "Seeding featured movies..."
-            val vodCats = client.fetchVodCategories(playlist.id)
-            val topVodCats = vodCats.take(4)
-            for (cat in topVodCats) {
-                val catRawId = cat.id.substringAfterLast("_")
-                val movies = client.fetchVodStreams(playlist.id, catRawId)
-                if (movies.isNotEmpty()) {
-                    db.vodDao().insertMovies(movies)
-                }
-            }
+            // Purge orphaned items and previous catalog for this playlist
+            db.channelDao().deleteOrphanedChannels()
+            db.categoryDao().deleteOrphanedCategories()
+            db.vodDao().deleteOrphanedMovies()
+            db.vodDao().deleteOrphanedSeries()
 
-            // Seed initial series (first 3 series categories)
-            _syncProgress.value = "Seeding featured series..."
-            val seriesCats = client.fetchSeriesCategories(playlist.id)
-            val topSeriesCats = seriesCats.take(4)
-            for (cat in topSeriesCats) {
-                val catRawId = cat.id.substringAfterLast("_")
-                val seriesList = client.fetchSeries(playlist.id, catRawId)
-                if (seriesList.isNotEmpty()) {
-                    db.vodDao().insertSeries(seriesList)
+            // 1. Bulk sync all movies across entire playlist in batches
+            _syncProgress.value = "Syncing full movies catalog..."
+            val allMovies = client.fetchVodStreams(playlist.id)
+            android.util.Log.d("ContentSyncManager", "Fetched ${allMovies.size} movies. Starting batch insertion...")
+            if (allMovies.isNotEmpty()) {
+                db.vodDao().deleteMoviesForPlaylist(playlist.id)
+                allMovies.chunked(500).forEach { batch ->
+                    db.vodDao().insertMovies(batch)
                 }
             }
+            android.util.Log.d("ContentSyncManager", "Finished inserting movies. Fetching series...")
+
+            // 2. Bulk sync all series across entire playlist in batches
+            _syncProgress.value = "Syncing full series catalog..."
+            val allSeries = client.fetchSeries(playlist.id)
+            android.util.Log.d("ContentSyncManager", "Fetched ${allSeries.size} series. Starting batch insertion...")
+            if (allSeries.isNotEmpty()) {
+                db.vodDao().deleteSeriesForPlaylist(playlist.id)
+                allSeries.chunked(500).forEach { batch ->
+                    db.vodDao().insertSeries(batch)
+                }
+            }
+            android.util.Log.d("ContentSyncManager", "Finished inserting series. Enriching featured media...")
+
             enrichFeaturedMedia(playlist)
             _syncProgress.value = "Catalog ready"
+            org.getlume.android.core.settings.ContentFilterCache.rebuildAsync(playlist.id)
+            android.util.Log.d("ContentSyncManager", "Sync complete. Triggering HomeTrendingManager.loadTrending...")
+            HomeTrendingManager.clearCache()
+            HomeTrendingManager.loadTrending(playlist.id)
         } catch (e: Exception) {
+            android.util.Log.e("ContentSyncManager", "Sync failed: ${e.message}", e)
             _syncProgress.value = "Sync error: ${e.message}"
         } finally {
             _isSyncing.value = false
@@ -102,14 +116,15 @@ object ContentSyncManager {
                 .sortedByDescending { it.rating }
                 .take(6)
             for (movie in topMovies) {
-                if (movie.backdropUrl.isBlank() || movie.plot.isBlank()) {
+                if (movie.backdropUrl.isBlank() || movie.plot.isBlank() || movie.genre.isBlank()) {
                     val details = client.fetchVodDetails(movie.streamId)
-                    if (details.backdropUrl.isNotBlank() || details.plot.isNotBlank()) {
+                    if (details.backdropUrl.isNotBlank() || details.plot.isNotBlank() || details.genre.isNotBlank()) {
                         db.vodDao().updateMovieEnrichment(
                             id = movie.id,
                             backdropUrl = details.backdropUrl,
                             plot = details.plot,
-                            rating = if (details.rating > 0f) details.rating else movie.rating
+                            rating = if (details.rating > 0f) details.rating else movie.rating,
+                            genre = details.genre
                         )
                     }
                 }
@@ -119,14 +134,15 @@ object ContentSyncManager {
                 .sortedByDescending { it.rating }
                 .take(6)
             for (series in topSeries) {
-                if (series.backdropUrl.isBlank() || series.plot.isBlank()) {
+                if (series.backdropUrl.isBlank() || series.plot.isBlank() || series.genre.isBlank()) {
                     val details = client.fetchSeriesDetails(series.seriesId)
-                    if (details.backdropUrl.isNotBlank() || details.plot.isNotBlank()) {
+                    if (details.backdropUrl.isNotBlank() || details.plot.isNotBlank() || details.genre.isNotBlank()) {
                         db.vodDao().updateSeriesEnrichment(
                             id = series.id,
                             backdropUrl = details.backdropUrl,
                             plot = details.plot,
-                            rating = if (details.rating > 0f) details.rating else series.rating
+                            rating = if (details.rating > 0f) details.rating else series.rating,
+                            genre = details.genre
                         )
                     }
                 }

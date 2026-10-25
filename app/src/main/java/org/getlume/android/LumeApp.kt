@@ -20,6 +20,8 @@ class LumeApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        org.getlume.android.core.settings.ContentFilterCache.init(this)
+        org.getlume.android.core.data.BrowseCache.init(this)
     }
 
     companion object {

@@ -18,7 +18,9 @@ data class PlayableMedia(
     val isLive: Boolean = true,
     val channelNumber: Int = 0,
     val durationMs: Long = 0L,
-    val startPositionMs: Long = 0L
+    val startPositionMs: Long = 0L,
+    val contentType: String = "channel",
+    val seriesId: String = ""
 )
 
 fun ChannelEntity.toPlayableMedia(): PlayableMedia {
@@ -29,7 +31,8 @@ fun ChannelEntity.toPlayableMedia(): PlayableMedia {
         streamUrl = streamUrl,
         posterUrl = logoUrl,
         isLive = true,
-        channelNumber = channelNumber
+        channelNumber = channelNumber,
+        contentType = "channel"
     )
 }
 
@@ -49,7 +52,8 @@ fun ChannelEntity.toCatchupPlayableMedia(program: EpgListingEntity): PlayableMed
         posterUrl = logoUrl,
         isLive = false,
         channelNumber = channelNumber,
-        durationMs = (program.endTime - program.startTime).coerceAtLeast(60000L)
+        durationMs = (program.endTime - program.startTime).coerceAtLeast(60000L),
+        contentType = "channel"
     )
 }
 
@@ -62,7 +66,8 @@ fun MovieEntity.toPlayableMedia(): PlayableMedia {
         posterUrl = posterUrl,
         backdropUrl = backdropUrl,
         isLive = false,
-        durationMs = (durationMinutes * 60 * 1000).toLong()
+        durationMs = (durationMinutes * 60 * 1000).toLong(),
+        contentType = "movie"
     )
 }
 
@@ -75,10 +80,16 @@ fun EpisodeEntity.toPlayableMedia(seriesTitle: String = ""): PlayableMedia {
         streamUrl = streamUrl,
         posterUrl = thumbnail,
         isLive = false,
-        durationMs = (durationMinutes * 60 * 1000).toLong()
+        durationMs = (durationMinutes * 60 * 1000).toLong(),
+        contentType = "episode",
+        seriesId = seriesId
     )
 }
 
 object ActivePlaybackStore {
     var currentMedia: PlayableMedia? = null
+}
+
+object ActiveModalStore {
+    val isModalOpen = androidx.compose.runtime.mutableStateOf(false)
 }

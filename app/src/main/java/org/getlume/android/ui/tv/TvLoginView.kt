@@ -43,6 +43,7 @@ import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.PlaylistEntity
 import org.getlume.android.core.designsystem.*
+import org.getlume.android.core.sync.PlaylistSyncManager
 import org.getlume.android.core.network.LanSetupServer
 import org.getlume.android.core.network.XtreamCodesClient
 import java.util.UUID
@@ -275,13 +276,8 @@ fun TvLoginView(
                                 db.playlistDao().insertPlaylist(playlist)
                                 db.playlistDao().setActivePlaylist(playlistId)
 
-                                if (selectedSource == LoginSourceType.XTREAM) {
-                                    val client = XtreamCodesClient(targetUrl, username, password)
-                                    val cats = client.fetchLiveCategories(playlistId)
-                                    val streams = client.fetchLiveStreams(playlistId)
-                                    db.categoryDao().insertCategories(cats)
-                                    db.channelDao().insertChannels(streams)
-                                }
+                                // Initial playlist sync: populates Live TV, Movies (with tmdbId), and Series (with tmdbId)
+                                PlaylistSyncManager.syncPlaylist(playlist)
 
                                 withContext(Dispatchers.Main) {
                                     isLoading = false

@@ -98,6 +98,7 @@ object EpgSyncManager {
             settings.epgLastSyncDate = now
             _syncMessage.value = "Synced ${listings.size} guide listings"
             Log.d(TAG, "Successfully synced ${listings.size} listings")
+            org.getlume.android.core.settings.ContentFilterCache.rebuildAsync()
             Result.success(listings.size)
         } catch (e: Exception) {
             Log.e(TAG, "EPG sync failed", e)

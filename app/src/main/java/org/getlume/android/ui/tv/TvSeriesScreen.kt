@@ -1,14 +1,14 @@
 package org.getlume.android.ui.tv
 
+import kotlinx.coroutines.delay
+
+import androidx.compose.ui.focus.focusProperties
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -16,105 +16,72 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
-import kotlinx.coroutines.launch
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.ui.input.key.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
+import org.getlume.android.core.data.BrowseCache
 import org.getlume.android.core.data.entities.CategoryEntity
-import org.getlume.android.core.data.entities.EpisodeEntity
 import org.getlume.android.core.data.entities.SeriesEntity
+import org.getlume.android.core.data.entities.WatchProgressEntity
 import org.getlume.android.core.designsystem.*
-import org.getlume.android.core.network.SeriesDetailsResult
-import org.getlume.android.core.network.XtreamCodesClient
 import org.getlume.android.core.player.PlayableMedia
 import org.getlume.android.core.player.toPlayableMedia
 import org.getlume.android.core.settings.AppSettings
+import org.getlume.android.core.settings.ContentFilterCache
 import org.getlume.android.core.sync.ContentSyncManager
 
 /**
- * Dedicated Series Tab for Apple TV Lume on Android TV.
- * Categories sidebar on the left, series grid on the right, and interactive Series Details & Episode selector modal.
+ * Authentic Apple TV Series Tab for Lume on Android TV.
+ * 100% faithful to Apple TV Lume's SeriesView.swift:
+ * - Edge-to-edge vertical scrolling browse screen (NO sidebars)
+ * - Horizontal browse rails: Recently Watched (with progress), Favorites, Recently Added
+ * - First 4 categories rendered as full horizontal preview rows with "Show All" links
+ * - Remaining categories rendered as lightweight 320x100 name tiles ("All Categories")
+ * - "Show All" and category tile drill-ins navigate to full-screen Category Content Grid
+ * - Clicking any poster opens the Apple TV full-bleed cinematic Series Detail view
+ * - Fully precomputed via BrowseCache on frame 0 (0ms, zero pop-in, zero layout thrashing)
  */
 @Composable
 fun TvSeriesScreen(
     onPlayMedia: (PlayableMedia) -> Unit,
     firstItemFocusRequester: FocusRequester = remember { FocusRequester() },
+    isTopBarFocused: Boolean = false,
+    onContentFocused: (() -> Unit)? = null,
     onMoveUpToTopBar: (() -> Unit)? = null
 ) {
     val db = LumeApp.instance.database
     val settings = remember { AppSettings.get() }
+    val revision by settings.revision.collectAsState()
     val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
-    val coroutineScope = rememberCoroutineScope()
+    val playlistId = activePlaylist?.id ?: ""
 
-    val categories by db.categoryDao().getCategories(activePlaylist?.id ?: "", "series").collectAsState(initial = emptyList())
-    var selectedCategory by remember { mutableStateOf<CategoryEntity?>(null) }
-    var selectedSeries by remember { mutableStateOf<SeriesEntity?>(null) }
-    var isLoadingCategory by remember { mutableStateOf(false) }
-    var isInGridPane by remember { mutableStateOf(false) }
+    // Observe categories
+    val categories by db.categoryDao().getCategories(playlistId, "series").collectAsState(initial = emptyList())
+    val categoryMap = remember(categories) { categories.associate { it.id to it.name } }
 
-    // Breadcrumb BackHandler: When in poster grid, Back retracts focus to the Category sidebar
-    BackHandler(enabled = isInGridPane && selectedSeries == null) {
-        try {
-            firstItemFocusRequester.requestFocus()
-        } catch (_: Exception) {}
-        isInGridPane = false
+    // Content Language filtering integration
+    val isFiltering by ContentFilterCache.isFiltering.collectAsState()
+    val allowedSeriesCatIds by ContentFilterCache.seriesCategoryIds.collectAsState()
+
+    val visibleCategories = remember(categories, isFiltering, allowedSeriesCatIds) {
+        if (!isFiltering) categories
+        else categories.filter { allowedSeriesCatIds.contains(it.id) }
     }
 
-    // Breadcrumb BackHandler: When in Category sidebar, Back retracts focus up to the TopBar
-    BackHandler(enabled = !isInGridPane && selectedSeries == null) {
-        onMoveUpToTopBar?.invoke()
-    }
-
-    // Filter categories based on active content languages (offloaded to background dispatcher)
-    val visibleCategories by produceState<List<CategoryEntity>>(
-        initialValue = categories,
-        categories,
-        settings.homeContentLanguages
-    ) {
-        value = withContext(Dispatchers.Default) {
-            if (settings.homeContentLanguages.isEmpty()) {
-                categories
-            } else {
-                categories.filter { cat ->
-                    settings.matchesContentLanguage("", cat.name)
-                }
-            }
-        }
-    }
-
-    // Default to first visible category or retain valid selection
-    LaunchedEffect(visibleCategories) {
-        val currentCat = selectedCategory
-        if (currentCat == null || visibleCategories.none { it.id == currentCat.id }) {
-            selectedCategory = visibleCategories.firstOrNull()
-        }
-    }
-
-    // Initial check: if no categories, fetch Series categories
+    // Auto-sync categories if empty
     LaunchedEffect(activePlaylist) {
         activePlaylist?.let { playlist ->
             if (categories.isEmpty()) {
@@ -123,574 +90,552 @@ fun TvSeriesScreen(
         }
     }
 
-    // Observe series for the selected category
-    val rawSeriesForCategory by if (selectedCategory != null) {
-        db.vodDao().getSeriesByCategory(activePlaylist?.id ?: "", selectedCategory!!.id).collectAsState(initial = emptyList())
-    } else {
-        db.vodDao().getSeries(activePlaylist?.id ?: "", 100).collectAsState(initial = emptyList())
-    }
+    // 0ms Synchronous In-Memory Rails from BrowseCache (eliminates dynamic insertion pop-in completely)
+    val filteredRecentlyWatched by BrowseCache.recentlyWatchedSeries.collectAsState()
+    val filteredFavorites by BrowseCache.favoriteSeries.collectAsState()
+    val filteredRecentlyAdded by BrowseCache.recentlyAddedSeries.collectAsState()
+    val previewCategoryMap by BrowseCache.previewCategorySeries.collectAsState()
 
-    val seriesForCategory by produceState<List<SeriesEntity>>(
-        initialValue = rawSeriesForCategory,
-        rawSeriesForCategory,
-        settings.homeContentLanguages,
-        selectedCategory
-    ) {
-        value = withContext(Dispatchers.Default) {
-            if (settings.homeContentLanguages.isEmpty()) {
-                rawSeriesForCategory
-            } else {
-                rawSeriesForCategory.filter { series ->
-                    settings.matchesContentLanguage(series.name, selectedCategory?.name ?: "")
-                }
-            }
+    // Observe precomputed genres from ContentFilterCache (0ms synchronous lookup)
+    val cachedSeriesGenres by ContentFilterCache.seriesGenres.collectAsState()
+    var genres by remember(cachedSeriesGenres) { mutableStateOf(cachedSeriesGenres) }
+    LaunchedEffect(cachedSeriesGenres, playlistId) {
+        if (genres.isEmpty() && playlistId.isNotEmpty()) {
+            genres = org.getlume.android.core.data.GenreDerivation.seriesGenres(playlistId)
         }
     }
 
-    // Auto-fetch series for category if not yet cached in Room
-    LaunchedEffect(selectedCategory) {
-        val cat = selectedCategory
-        val pl = activePlaylist
-        if (cat != null && pl != null && rawSeriesForCategory.isEmpty()) {
-            isLoadingCategory = true
-            ContentSyncManager.loadCategorySeries(pl, cat)
-            isLoadingCategory = false
+    // Navigation Sub-screen state
+    var selectedSeries by remember { mutableStateOf<SeriesEntity?>(null) }
+    var activeGridTitle by remember { mutableStateOf<String?>(null) }
+    var activeGridCategory by remember { mutableStateOf<CategoryEntity?>(null) }
+    var activeGridGenre by remember { mutableStateOf<String?>(null) }
+    var activeGridCollectionItems by remember { mutableStateOf<List<SeriesEntity>?>(null) }
+
+    // Last focused card requester so focus is cleanly restored when detail sheets or grids are dismissed
+    var lastFocusedSeriesRequester by remember { mutableStateOf<FocusRequester?>(null) }
+    var isReturningFromGrid by remember { mutableStateOf(false) }
+    val genreFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+    val categoryFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+    var lastOpenedGenre by remember { mutableStateOf<String?>(null) }
+    var lastOpenedCategory by remember { mutableStateOf<CategoryEntity?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    // Breadcrumb tree back handling
+    if (selectedSeries == null && activeGridTitle == null && !isReturningFromGrid) {
+        BackHandler {
+            onMoveUpToTopBar?.invoke()
         }
     }
+
+
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF07090E))
-            .padding(top = 80.dp)
     ) {
-        Row(modifier = Modifier.fillMaxSize()) {
-            // Left Column: Series Categories Sidebar
-            Column(
+        if (activePlaylist == null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("No Playlists", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text("Add a playlist in Settings to start browsing series", color = LumeTextSecondary, fontSize = 14.sp)
+                }
+            }
+        } else if (categories.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = LumeAccentBlue, modifier = Modifier.size(36.dp))
+            }
+        } else if (visibleCategories.isEmpty() && isFiltering) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("No Series for Selected Languages", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("Adjust your Content Languages in Library Settings", color = LumeTextSecondary, fontSize = 14.sp)
+                }
+            }
+        } else {
+            val previewCategories = remember(visibleCategories) { visibleCategories.take(4) }
+            val remainingCategories = remember(visibleCategories) { visibleCategories.drop(4) }
+            val genreChunks = remember(genres) { genres.chunked(4) }
+            val catChunks = remember(remainingCategories) { remainingCategories.chunked(4) }
+
+            // Root Edge-to-Edge Vertical Scrolling Browse Screen
+            LazyColumn(
                 modifier = Modifier
-                    .width(260.dp)
-                    .fillMaxHeight()
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .onFocusChanged { if (it.hasFocus) isInGridPane = false }
-                    .padding(vertical = 16.dp, horizontal = 16.dp)
+                    .fillMaxSize()
+                    .focusProperties { canFocus = selectedSeries == null },
+                contentPadding = PaddingValues(top = 96.dp, bottom = 48.dp),
+                verticalArrangement = Arrangement.spacedBy(28.dp)
             ) {
-                Text(
-                    text = "CATEGORIES",
-                    color = LumeTextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                )
-
-                if (categories.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = LumeAccentBlue, modifier = Modifier.size(32.dp))
-                    }
-                } else if (visibleCategories.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No matching categories", color = LumeTextSecondary, fontSize = 13.sp)
-                    }
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                        contentPadding = PaddingValues(bottom = 24.dp)
-                    ) {
-                        itemsIndexed(visibleCategories) { index, category ->
-                            val isSelected = selectedCategory?.id == category.id
-                            val itemFocusRequester = if (isSelected || (selectedCategory == null && index == 0)) {
-                                firstItemFocusRequester
-                            } else null
-
-                            TvSeriesCategoryItem(
-                                category = category,
-                                isSelected = isSelected,
-                                focusRequester = itemFocusRequester,
-                                onMoveUp = if (index == 0) onMoveUpToTopBar else null,
-                                onClick = { selectedCategory = category }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Right Column: Series 2:3 Poster Grid
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .onFocusChanged { if (it.hasFocus) isInGridPane = true }
-                    .padding(horizontal = 24.dp, vertical = 12.dp)
-            ) {
-                // Header: Category Title & Count
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = selectedCategory?.name ?: "All Series",
-                        color = Color.White,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "${seriesForCategory.size} shows",
-                        color = LumeTextSecondary,
-                        fontSize = 14.sp
-                    )
-                }
-
-                if (isLoadingCategory && seriesForCategory.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                // 1. Recently Watched Rail (with progress bar)
+                if (filteredRecentlyWatched.isNotEmpty()) {
+                    item(key = "recently_watched") {
+                        TvBrowseRow(
+                            title = "Recently Watched",
+                            hasMore = filteredRecentlyWatched.size > 20,
+                            onShowAll = {
+                                activeGridTitle = "Recently Watched"
+                                activeGridCollectionItems = filteredRecentlyWatched.map { it.second }
+                            }
                         ) {
-                            CircularProgressIndicator(color = LumeAccentBlue)
-                            Text("Loading series...", color = LumeTextSecondary, fontSize = 14.sp)
-                        }
-                    }
-                } else if (seriesForCategory.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No series found in this category", color = LumeTextSecondary, fontSize = 16.sp)
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 140.dp),
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        contentPadding = PaddingValues(bottom = 36.dp)
-                    ) {
-                        itemsIndexed(seriesForCategory) { index, series ->
-                            TvSeriesCard(
-                                series = series,
-                                onMoveUp = if (index < 5) onMoveUpToTopBar else null,
-                                onClick = { selectedSeries = series }
-                            )
-                        }
-                    }
-                }
-            }
-        }
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 36.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusGroup()
+                                    
+                            ) {
+                                itemsIndexed(filteredRecentlyWatched.take(20)) { index, (progress, series) ->
+                                    val requester = if (index == 0) firstItemFocusRequester else remember { FocusRequester() }
+                                    val progressFraction = if (progress.durationMs > 0) progress.positionMs.toFloat() / progress.durationMs.toFloat() else null
 
-        // Apple TV Faithful Series Detail Modal Sheet with Episodes
-        selectedSeries?.let { series ->
-            BackHandler { selectedSeries = null }
-            activePlaylist?.let { playlist ->
-                TvSeriesDetailSheet(
-                    series = series,
-                    playlist = playlist,
-                    onPlayEpisode = { episode ->
-                        // Keep selectedSeries active so returning from playback lands on the series details sheet
-                        onPlayMedia(episode.toPlayableMedia(series.name))
-                    },
-                    onDismiss = { selectedSeries = null }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TvSeriesCategoryItem(
-    category: CategoryEntity,
-    isSelected: Boolean,
-    focusRequester: FocusRequester? = null,
-    onMoveUp: (() -> Unit)? = null,
-    onClick: () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(targetValue = if (isFocused) 1.04f else 1.0f, label = "catScale")
-
-    val bgColor = when {
-        isFocused -> Color.White
-        isSelected -> LumeAccentBlue.copy(alpha = 0.25f)
-        else -> Color.Transparent
-    }
-
-    val textColor = when {
-        isFocused -> Color.Black
-        isSelected -> LumeAccentBlue
-        else -> Color.White.copy(alpha = 0.85f)
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .scale(scale)
-            .clip(RoundedCornerShape(10.dp))
-            .background(bgColor)
-            .onPreviewKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
-                    if (onMoveUp != null) {
-                        onMoveUp()
-                        true
-                    } else false
-                } else false
-            }
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp)
-    ) {
-        Text(
-            text = category.name,
-            color = textColor,
-            fontSize = 14.sp,
-            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-private fun TvSeriesCard(
-    series: SeriesEntity,
-    onMoveUp: (() -> Unit)? = null,
-    onClick: () -> Unit
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(targetValue = if (isFocused) 1.08f else 1.0f, label = "cardScale")
-
-    Column(
-        modifier = Modifier
-            .width(140.dp)
-            .scale(scale)
-            .onPreviewKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
-                    if (onMoveUp != null) {
-                        onMoveUp()
-                        true
-                    } else false
-                } else false
-            }
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.White.copy(alpha = 0.08f))
-                .border(
-                    width = if (isFocused) 2.5.dp else 1.dp,
-                    color = if (isFocused) Color.White else Color.White.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(12.dp)
-                )
-        ) {
-            if (series.posterUrl.isNotBlank()) {
-                AsyncImage(
-                    model = series.posterUrl,
-                    contentDescription = series.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = series.name.take(2).uppercase(),
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            if (series.rating > 0f) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Black.copy(alpha = 0.75f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(11.dp))
-                        Text(
-                            text = String.format("%.1f", series.rating),
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-        }
-
-        Text(
-            text = series.name,
-            color = if (isFocused) Color.White else Color.White.copy(alpha = 0.88f),
-            fontSize = 13.sp,
-            fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-@Composable
-internal fun TvSeriesDetailSheet(
-    series: SeriesEntity,
-    playlist: org.getlume.android.core.data.entities.PlaylistEntity,
-    onPlayEpisode: (EpisodeEntity) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val client = remember(playlist) {
-        XtreamCodesClient(playlist.serverUrl, playlist.username, playlist.password)
-    }
-
-    var detailsResult by remember { mutableStateOf<SeriesDetailsResult?>(null) }
-    var selectedSeason by remember { mutableStateOf<Int?>(null) }
-    var isLoadingEpisodes by remember { mutableStateOf(true) }
-
-    LaunchedEffect(series.seriesId) {
-        isLoadingEpisodes = true
-        detailsResult = client.fetchSeriesDetails(series.seriesId)
-        selectedSeason = detailsResult?.seasons?.firstOrNull() ?: 1
-        isLoadingEpisodes = false
-    }
-
-    val episodesForSeason = remember(detailsResult, selectedSeason) {
-        detailsResult?.episodes?.filter { it.seasonNumber == (selectedSeason ?: 1) } ?: emptyList()
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.90f))
-            .padding(42.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xFF131722))
-                .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(24.dp))
-                .padding(32.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            // Top Section: Poster & Overview
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(28.dp),
-                verticalAlignment = Alignment.Top
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(160.dp)
-                        .aspectRatio(2f / 3f)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color.White.copy(alpha = 0.05f))
-                ) {
-                    if (series.posterUrl.isNotBlank()) {
-                        AsyncImage(
-                            model = series.posterUrl,
-                            contentDescription = series.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = series.name,
-                            color = Color.White,
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        TvSettingsActionButton(
-                            title = "Close",
-                            onClick = onDismiss
-                        )
-                    }
-
-                    if (series.rating > 0f) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(16.dp))
-                            Text(String.format("%.1f", series.rating), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    Text(
-                        text = if (series.plot.isNotBlank()) series.plot else detailsResult?.plot?.ifBlank { "Select an episode to begin watching." } ?: "Select an episode to begin watching.",
-                        color = Color.White.copy(alpha = 0.75f),
-                        fontSize = 14.sp,
-                        lineHeight = 20.sp,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    // Season Selector Tabs
-                    val seasons = detailsResult?.seasons ?: emptyList()
-                    if (seasons.isNotEmpty()) {
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) {
-                            items(seasons) { seasonNum ->
-                                val isSelected = selectedSeason == seasonNum
-                                val interaction = remember { MutableInteractionSource() }
-                                val isFocused by interaction.collectIsFocusedAsState()
-
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(if (isSelected || isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.10f))
-                                        .clickable(interactionSource = interaction, indication = null) {
-                                            selectedSeason = seasonNum
+                                    TvPosterCard(
+                                        title = series.name,
+                                        posterUrl = series.posterUrl,
+                                        rating = series.rating,
+                                        progressFraction = progressFraction,
+                                        focusRequester = requester,
+                                        onMoveUp = onMoveUpToTopBar,
+                                        onClick = {
+                                            lastFocusedSeriesRequester = requester
+                                            selectedSeries = series
                                         }
-                                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                                ) {
-                                    Text(
-                                        text = "Season $seasonNum",
-                                        color = Color.White,
-                                        fontSize = 14.sp,
-                                        fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
                                     )
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // Bottom Section: Episodes List
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "EPISODES",
-                    color = LumeTextSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
+                // 2. Favorites Rail
+                if (filteredFavorites.isNotEmpty()) {
+                    item(key = "favorites") {
+                        TvBrowseRow(
+                            title = "Favorites",
+                            hasMore = filteredFavorites.size > 20,
+                            onShowAll = {
+                                activeGridTitle = "Favorites"
+                                activeGridCollectionItems = filteredFavorites
+                            }
+                        ) {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 36.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusGroup()
+                                    
+                            ) {
+                                itemsIndexed(filteredFavorites.take(20)) { index, series ->
+                                    val requester = if (index == 0 && filteredRecentlyWatched.isEmpty()) firstItemFocusRequester else remember { FocusRequester() }
 
-                if (isLoadingEpisodes) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = LumeAccentBlue)
-                    }
-                } else if (episodesForSeason.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No episodes found for this season", color = LumeTextSecondary)
-                    }
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(episodesForSeason) { episode ->
-                            TvEpisodeRow(
-                                episode = episode,
-                                onClick = { onPlayEpisode(episode) }
-                            )
+                                    TvPosterCard(
+                                        title = series.name,
+                                        posterUrl = series.posterUrl,
+                                        rating = series.rating,
+                                        focusRequester = requester,
+                                        onMoveUp = if (filteredRecentlyWatched.isEmpty()) onMoveUpToTopBar else null,
+                                        onClick = {
+                                            lastFocusedSeriesRequester = requester
+                                            selectedSeries = series
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
+
+                // 3. Recently Added Rail (1:1 Apple TV SeriesCollectionRow .recentlyAdded)
+                item(key = "recently_added") {
+                    val isTopRail = filteredRecentlyWatched.isEmpty() && filteredFavorites.isEmpty()
+                    TvBrowseRow(
+                        title = "Recently Added",
+                        hasMore = filteredRecentlyAdded.size > 20,
+                        onShowAll = {
+                            activeGridTitle = "Recently Added"
+                            activeGridCollectionItems = filteredRecentlyAdded
+                        }
+                    ) {
+                        if (filteredRecentlyAdded.isNotEmpty()) {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 36.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusGroup()
+                                    
+                            ) {
+                                itemsIndexed(filteredRecentlyAdded.take(20)) { index, series ->
+                                    val requester = if (index == 0 && isTopRail) firstItemFocusRequester else remember { FocusRequester() }
+
+                                    TvPosterCard(
+                                        title = series.name,
+                                        posterUrl = series.posterUrl,
+                                        rating = series.rating,
+                                        focusRequester = requester,
+                                        onMoveUp = if (isTopRail) onMoveUpToTopBar else null,
+                                        onClick = {
+                                            lastFocusedSeriesRequester = requester
+                                            selectedSeries = series
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 36.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(6) { idx ->
+                                    TvPosterCardSkeleton(
+                                        focusRequester = if (idx == 0 && isTopRail) firstItemFocusRequester else null,
+                                        onMoveUp = if (isTopRail) onMoveUpToTopBar else null
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 4. First 4 Categories rendered as full inline horizontal preview rows
+                itemsIndexed(previewCategories, key = { _, cat -> cat.id }) { catIdx, category ->
+                    val isFirstRailOverall = catIdx == 0 && filteredRecentlyWatched.isEmpty() && filteredFavorites.isEmpty() && filteredRecentlyAdded.isEmpty()
+
+                    SeriesCategoryPreviewRow(
+                        category = category,
+                        playlistId = playlistId,
+                        categoryMap = categoryMap,
+                        preloadedSeries = previewCategoryMap[category.id],
+                        firstItemRequester = if (isFirstRailOverall) firstItemFocusRequester else null,
+                        onMoveUpToTopBar = if (isFirstRailOverall) onMoveUpToTopBar else null,
+                        onSelectSeries = { series, req ->
+                            lastFocusedSeriesRequester = req
+                            selectedSeries = series
+                        },
+                        onShowAll = {
+                            activeGridTitle = category.name
+                            activeGridCategory = category
+                        }
+                    )
+                }
+
+                // 5. Browse by Genre (1:1 Apple TV GenreGridSection, row items for native vertical scrolling)
+                if (genres.isNotEmpty()) {
+                    item(key = "browse_by_genre_header") {
+                        Text(
+                            text = "Browse by Genre",
+                            color = LumeTextSecondary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.padding(horizontal = 36.dp)
+                        )
+                    }
+                    itemsIndexed(genreChunks, key = { idx, _ -> "genre_chunk_$idx" }) { _, rowGenres ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 36.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            for (genre in rowGenres) {
+                                val tileReq = genreFocusRequesters.getOrPut(genre) { FocusRequester() }
+                                TvCategoryTile(
+                                    name = genre,
+                                    focusRequester = tileReq,
+                                    onFocused = {
+                                        lastFocusedSeriesRequester = tileReq
+                                        lastOpenedGenre = genre
+                                        TvFocusRescue.register(tileReq)
+                                        onContentFocused?.invoke()
+                                    },
+                                    onClick = {
+                                        lastFocusedSeriesRequester = tileReq
+                                        lastOpenedGenre = genre
+                                        lastOpenedCategory = null
+                                        activeGridTitle = genre
+                                        activeGridGenre = genre
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            if (rowGenres.size < 4) {
+                                repeat(4 - rowGenres.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 6. Remaining Categories rendered as lightweight name tiles (All Categories grid, chunked rows)
+                if (remainingCategories.isNotEmpty()) {
+                    item(key = "all_categories_header") {
+                        Text(
+                            text = "All Categories",
+                            color = LumeTextSecondary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier
+                                .padding(horizontal = 36.dp)
+                                .padding(top = 12.dp)
+                        )
+                    }
+                    itemsIndexed(catChunks, key = { idx, _ -> "cat_chunk_$idx" }) { _, rowCats ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 36.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            for (cat in rowCats) {
+                                val tileReq = categoryFocusRequesters.getOrPut(cat.id) { FocusRequester() }
+                                TvCategoryTile(
+                                    name = cat.name,
+                                    focusRequester = tileReq,
+                                    onFocused = {
+                                        lastFocusedSeriesRequester = tileReq
+                                        lastOpenedCategory = cat
+                                        TvFocusRescue.register(tileReq)
+                                        onContentFocused?.invoke()
+                                    },
+                                    onClick = {
+                                        lastFocusedSeriesRequester = tileReq
+                                        lastOpenedCategory = cat
+                                        lastOpenedGenre = null
+                                        activeGridTitle = cat.name
+                                        activeGridCategory = cat
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            if (rowCats.size < 4) {
+                                repeat(4 - rowCats.size) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sub-screen: Category / Collection / Genre Poster Grid ("Show All") with Guaranteed Focus
+        if (activeGridTitle != null) {
+            val title = activeGridTitle ?: ""
+            val cat = activeGridCategory
+            val genreTarget = activeGridGenre
+            val presetSeries = activeGridCollectionItems
+
+            val rawGenreSeries by if (genreTarget != null) {
+                db.vodDao().getSeriesByGenre(playlistId, genreTarget).collectAsState(initial = emptyList())
+            } else {
+                remember { mutableStateOf(emptyList<SeriesEntity>()) }
+            }
+
+            val rawCatSeries by if (cat != null) {
+                db.vodDao().getSeriesByCategory(playlistId, cat.id).collectAsState(initial = emptyList())
+            } else {
+                remember { mutableStateOf(emptyList<SeriesEntity>()) }
+            }
+
+            if (cat != null) {
+                LaunchedEffect(cat.id) {
+                    if (rawCatSeries.isEmpty()) {
+                        activePlaylist?.let { pl ->
+                            ContentSyncManager.loadCategorySeries(pl, cat)
+                        }
+                    }
+                }
+            }
+
+            val displaySeries = remember(presetSeries, rawGenreSeries, rawCatSeries, genreTarget, cat, revision) {
+                when {
+                    presetSeries != null -> presetSeries
+                    genreTarget != null -> {
+                        if (settings.homeContentLanguages.isEmpty()) rawGenreSeries
+                        else rawGenreSeries.filter { series ->
+                            val catName = categoryMap[series.categoryId] ?: ""
+                            (allowedSeriesCatIds.isEmpty() || allowedSeriesCatIds.contains(series.categoryId)) &&
+                                    settings.matchesContentLanguage(series.name, catName)
+                        }
+                    }
+                    cat != null -> {
+                        if (settings.homeContentLanguages.isEmpty()) rawCatSeries
+                        else rawCatSeries.filter { series ->
+                            settings.matchesContentLanguage(series.name, cat.name)
+                        }
+                    }
+                    else -> emptyList()
+                }
+            }
+
+            val isGridLoading = when {
+                presetSeries != null -> false
+                genreTarget != null -> rawGenreSeries.isEmpty()
+                cat != null -> rawCatSeries.isEmpty()
+                else -> false
+            }
+
+            TvCategoryContentGridScreen(
+                title = title,
+                itemCount = displaySeries.size,
+                isLoading = isGridLoading,
+                emptyMessage = "No series found in $title",
+                onBack = {
+                    val genreToRestore = lastOpenedGenre
+                    val catToRestore = lastOpenedCategory
+                    isReturningFromGrid = true
+                    activeGridTitle = null
+                    activeGridCategory = null
+                    activeGridGenre = null
+                    activeGridCollectionItems = null
+                    coroutineScope.launch {
+                        val targetReq = when {
+                            genreToRestore != null -> genreFocusRequesters[genreToRestore]
+                            catToRestore != null -> categoryFocusRequesters[catToRestore.id]
+                            else -> lastFocusedSeriesRequester
+                        }
+                        for (i in 0..25) {
+                            delay(25)
+                            try {
+                                if (targetReq != null && targetReq.requestFocus()) {
+                                    break
+                                }
+                            } catch (_: Exception) {}
+                        }
+                        delay(250)
+                        isReturningFromGrid = false
+                    }
+                }
+            ) { firstItemRequester ->
+                val gridRequesters = remember(title) { mutableMapOf<String, FocusRequester>() }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(6),
+                    contentPadding = PaddingValues(horizontal = 36.dp, vertical = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    itemsIndexed(displaySeries, key = { _, m -> "grid_${m.id}" }) { index, series ->
+                        val req = if (index == 0) firstItemRequester else gridRequesters.getOrPut(series.id) { FocusRequester() }
+                        TvPosterCard(
+                            title = series.name,
+                            posterUrl = series.posterUrl,
+                            rating = series.rating,
+                            fillsWidth = true,
+                            focusRequester = req,
+                            onClick = { selectedSeries = series }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Sub-screen: Apple TV Full-Bleed Series Detail Page with Seasons and Episodes
+        selectedSeries?.let { series ->
+            activePlaylist?.let { pl ->
+                TvSeriesDetailSheet(
+                    series = series,
+                    playlist = pl,
+                    onPlayEpisode = { episode ->
+                        selectedSeries = null
+                        onPlayMedia(episode.toPlayableMedia(seriesTitle = series.name))
+                    },
+                    onDismiss = {
+                        selectedSeries = null
+                        try {
+                            (lastFocusedSeriesRequester ?: firstItemFocusRequester).requestFocus()
+                        } catch (_: Exception) {}
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun TvEpisodeRow(
-    episode: EpisodeEntity,
-    onClick: () -> Unit
+private fun SeriesCategoryPreviewRow(
+    category: CategoryEntity,
+    playlistId: String,
+    categoryMap: Map<String, String>,
+    preloadedSeries: List<SeriesEntity>? = null,
+    firstItemRequester: FocusRequester? = null,
+    onMoveUpToTopBar: (() -> Unit)? = null,
+    onSelectSeries: (SeriesEntity, FocusRequester) -> Unit,
+    onShowAll: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(targetValue = if (isFocused) 1.02f else 1.0f, label = "epScale")
+    val db = LumeApp.instance.database
+    val settings = remember { AppSettings.get() }
+    val revision by settings.revision.collectAsState()
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .scale(scale)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (isFocused) Color.White else Color.White.copy(alpha = 0.05f))
-            .border(
-                width = if (isFocused) 2.dp else 1.dp,
-                color = if (isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.08f),
-                shape = RoundedCornerShape(12.dp)
-            )
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        // Episode Number Badge
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.12f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "${episode.episodeNumber}",
-                color = if (isFocused) Color.White else Color.White.copy(alpha = 0.9f),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
+    val rawSeries by db.vodDao().getSeriesByCategoryLimited(playlistId, category.id, 21).collectAsState(initial = emptyList())
 
-        // Title and Duration
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = episode.title,
-                color = if (isFocused) Color.Black else Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (episode.plot.isNotBlank()) {
-                Text(
-                    text = episode.plot,
-                    color = if (isFocused) Color.Black.copy(alpha = 0.7f) else LumeTextSecondary,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+    LaunchedEffect(category.id, rawSeries.size, preloadedSeries?.size) {
+        if (rawSeries.isEmpty() && (preloadedSeries == null || preloadedSeries.isEmpty())) {
+            val pl = db.playlistDao().getActivePlaylist()
+            if (pl != null) {
+                ContentSyncManager.loadCategorySeries(pl, category)
             }
         }
+    }
 
-        if (episode.durationMinutes > 0) {
-            Text(
-                text = "${episode.durationMinutes}m",
-                color = if (isFocused) Color.Black.copy(alpha = 0.7f) else LumeTextSecondary,
-                fontSize = 13.sp
-            )
+    val displaySeries = remember(preloadedSeries, rawSeries, revision) {
+        if (!preloadedSeries.isNullOrEmpty()) {
+            preloadedSeries
+        } else if (settings.homeContentLanguages.isEmpty()) {
+            rawSeries
+        } else {
+            rawSeries.filter { series ->
+                settings.matchesContentLanguage(series.name, category.name)
+            }
         }
+    }
 
-        Icon(
-            Icons.Default.PlayArrow,
-            contentDescription = "Play",
-            tint = if (isFocused) Color.Black else LumeAccentBlue,
-            modifier = Modifier.size(22.dp)
-        )
+    TvBrowseRow(
+        title = category.name,
+        hasMore = displaySeries.size > 20,
+        onShowAll = onShowAll
+    ) {
+        if (displaySeries.isNotEmpty()) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 36.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusGroup()
+                    
+            ) {
+                itemsIndexed(displaySeries.take(20)) { index, series ->
+                    val requester = if (index == 0 && firstItemRequester != null) firstItemRequester else remember { FocusRequester() }
+
+                    TvPosterCard(
+                        title = series.name,
+                        posterUrl = series.posterUrl,
+                        rating = series.rating,
+                        focusRequester = requester,
+                        onMoveUp = onMoveUpToTopBar,
+                        onClick = { onSelectSeries(series, requester) }
+                    )
+                }
+            }
+        } else {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 36.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(6) { idx ->
+                    TvPosterCardSkeleton(
+                        focusRequester = if (idx == 0 && firstItemRequester != null) firstItemRequester else null,
+                        onMoveUp = onMoveUpToTopBar
+                    )
+                }
+            }
+        }
     }
 }

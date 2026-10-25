@@ -35,6 +35,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.getlume.android.LumeApp
@@ -57,6 +59,7 @@ import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.data.entities.MovieEntity
 import org.getlume.android.core.data.entities.SeriesEntity
 import org.getlume.android.core.designsystem.*
+import org.getlume.android.core.designsystem.TvFocusRescue
 import org.getlume.android.core.player.PlayableMedia
 import org.getlume.android.core.player.toPlayableMedia
 import java.util.Locale
@@ -116,6 +119,7 @@ sealed class SearchResultItem {
 fun TvSearchScreen(
     onPlayMedia: (PlayableMedia) -> Unit,
     firstItemFocusRequester: FocusRequester = remember { FocusRequester() },
+    isTopBarFocused: Boolean = false,
     onMoveUpToTopBar: (() -> Unit)? = null
 ) {
     val db = LumeApp.instance.database
@@ -134,7 +138,29 @@ fun TvSearchScreen(
 
     val filterPillsFocusRequester = remember { FocusRequester() }
     val resultsGridFocusRequester = remember { FocusRequester() }
+    var lastFocusedSearchRequester by remember { mutableStateOf<FocusRequester?>(null) }
+    val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+
+    DisposableEffect(firstItemFocusRequester) {
+        TvFocusRescue.register(firstItemFocusRequester)
+        onDispose {
+            TvFocusRescue.unregister(firstItemFocusRequester)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        var delayMs = 30L
+        for (i in 1..10) {
+            delay(delayMs)
+            try {
+                firstItemFocusRequester.requestFocus()
+                break
+            } catch (_: Exception) {
+                delayMs = (delayMs * 1.3).toLong()
+            }
+        }
+    }
 
     // Debounce search input (500ms remote pause, matching tvOS debounce in SearchView.swift)
     LaunchedEffect(searchText) {
@@ -186,26 +212,60 @@ fun TvSearchScreen(
         }
     }
 
-    // Breadcrumb BackHandler 1: Dismiss detail modal sheets first
-    if (selectedMovie != null) {
-        BackHandler { selectedMovie = null }
-    }
-    if (selectedSeries != null) {
-        BackHandler { selectedSeries = null }
+    val dismissDetails: () -> Unit = {
+        selectedMovie = null
+        selectedSeries = null
+        coroutineScope.launch {
+            var success = false
+            for (i in 0..10) {
+                delay(25)
+                try {
+                    if ((lastFocusedSearchRequester ?: resultsGridFocusRequester).requestFocus()) {
+                        success = true
+                        break
+                    }
+                } catch (_: Exception) {}
+            }
+            if (!success) {
+                try { firstItemFocusRequester.requestFocus() } catch (_: Exception) {}
+            }
+        }
     }
 
-    // Breadcrumb BackHandler 2: When in results grid, Back moves focus back up to the search input / filter
-    BackHandler(enabled = isInResultsGrid && selectedMovie == null && selectedSeries == null) {
-        try {
-            firstItemFocusRequester.requestFocus()
-        } catch (_: Exception) {}
-        isInResultsGrid = false
+    // Breadcrumb BackHandler 1: Dismiss detail modal sheets first and restore focus
+    if (selectedMovie != null || selectedSeries != null) {
+        BackHandler { dismissDetails() }
     }
 
-    // Breadcrumb BackHandler 3: When at top level (search bar/filter), Back clears query or retracts to TopBar
-    BackHandler(enabled = !isInResultsGrid && selectedMovie == null && selectedSeries == null) {
-        if (searchText.isNotEmpty()) {
+    // Consolidated BackHandler for Search: Results Grid -> Search Bar -> Clear Query -> TopBar
+    BackHandler(enabled = !isTopBarFocused && selectedMovie == null && selectedSeries == null) {
+        if (isInResultsGrid) {
+            isInResultsGrid = false
+            var success = false
+            for (i in 0..5) {
+                try {
+                    if (firstItemFocusRequester.requestFocus()) {
+                        success = true
+                        break
+                    }
+                } catch (_: Exception) {}
+            }
+            if (!success) onMoveUpToTopBar?.invoke()
+        } else if (searchText.isNotEmpty()) {
             searchText = ""
+            coroutineScope.launch {
+                var success = false
+                for (i in 0..5) {
+                    delay(25)
+                    try {
+                        if (firstItemFocusRequester.requestFocus()) {
+                            success = true
+                            break
+                        }
+                    } catch (_: Exception) {}
+                }
+                if (!success) onMoveUpToTopBar?.invoke()
+            }
         } else {
             onMoveUpToTopBar?.invoke()
         }
@@ -220,7 +280,8 @@ fun TvSearchScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 48.dp),
+                    .padding(horizontal = 48.dp)
+                    .focusProperties { canFocus = selectedMovie == null && selectedSeries == null },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Spacer(modifier = Modifier.height(12.dp))
@@ -393,8 +454,14 @@ fun TvSearchScreen(
                                         } else null,
                                         onClick = {
                                             when (item) {
-                                                is SearchResultItem.Movie -> selectedMovie = item.movie
-                                                is SearchResultItem.Series -> selectedSeries = item.series
+                                                is SearchResultItem.Movie -> {
+                                                    lastFocusedSearchRequester = itemFocusRequester ?: resultsGridFocusRequester
+                                                    selectedMovie = item.movie
+                                                }
+                                                is SearchResultItem.Series -> {
+                                                    lastFocusedSearchRequester = itemFocusRequester ?: resultsGridFocusRequester
+                                                    selectedSeries = item.series
+                                                }
                                                 is SearchResultItem.Channel -> onPlayMedia(item.channel.toPlayableMedia())
                                             }
                                         }
@@ -411,9 +478,10 @@ fun TvSearchScreen(
                 TvMovieDetailSheet(
                     movie = movie,
                     onPlay = {
+                        selectedMovie = null
                         onPlayMedia(movie.toPlayableMedia())
                     },
-                    onDismiss = { selectedMovie = null }
+                    onDismiss = dismissDetails
                 )
             }
 
@@ -424,9 +492,10 @@ fun TvSearchScreen(
                         series = series,
                         playlist = playlist,
                         onPlayEpisode = { episode ->
+                            selectedSeries = null
                             onPlayMedia(episode.toPlayableMedia(series.name))
                         },
-                        onDismiss = { selectedSeries = null }
+                        onDismiss = dismissDetails
                     )
                 }
             }

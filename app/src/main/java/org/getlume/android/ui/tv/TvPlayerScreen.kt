@@ -3,6 +3,7 @@ package org.getlume.android.ui.tv
 import android.view.KeyEvent
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -15,6 +16,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -52,6 +55,15 @@ fun TvPlayerScreen(
     var currentPositionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(media.durationMs) }
 
+    val playerFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(100)
+        try {
+            playerFocusRequester.requestFocus()
+        } catch (_: Exception) {}
+    }
+
     DisposableEffect(currentMedia) {
         playerManager.playMedia(currentMedia)
         if (currentMedia.isLive) {
@@ -74,17 +86,23 @@ fun TvPlayerScreen(
             // Save watch progress if VOD
             if (!currentMedia.isLive && currentPositionMs > 5000L) {
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    val progressContentId = if (currentMedia.contentType == "episode" && currentMedia.seriesId.isNotBlank()) {
+                        currentMedia.seriesId
+                    } else {
+                        currentMedia.id
+                    }
                     val progress = WatchProgressEntity(
-                        contentId = currentMedia.id,
+                        contentId = progressContentId,
                         profileId = AppSettings.get().activeProfileId,
                         title = currentMedia.title,
                         posterUrl = currentMedia.posterUrl,
-                        contentType = "movie",
+                        contentType = currentMedia.contentType.ifBlank { "movie" },
                         positionMs = currentPositionMs,
                         durationMs = durationMs.coerceAtLeast(1L),
                         isCompleted = durationMs > 0 && currentPositionMs > (durationMs * 0.90)
                     )
                     LumeApp.instance.database.watchProgressDao().saveProgress(progress)
+                    org.getlume.android.core.data.BrowseCache.refreshRecentlyWatched()
                 }
             }
             playerManager.release()
@@ -122,6 +140,8 @@ fun TvPlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(playerFocusRequester)
+            .focusable()
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown) {
                     when (keyEvent.nativeKeyEvent.keyCode) {
