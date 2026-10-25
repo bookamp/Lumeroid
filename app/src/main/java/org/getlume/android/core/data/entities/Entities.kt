@@ -78,7 +78,11 @@ data class EpgListingEntity(
 
 @Entity(
     tableName = "movies",
-    indices = [Index(value = ["playlistId", "categoryId"])]
+    indices = [
+        Index(value = ["playlistId", "categoryId"]),
+        Index(value = ["tmdbId"]),
+        Index(value = ["added"])
+    ]
 )
 data class MovieEntity(
     @PrimaryKey val id: String,
@@ -96,12 +100,20 @@ data class MovieEntity(
     val rating: Float = 0.0f,
     val streamUrl: String = "",
     val extension: String = "mp4",
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val genre: String = "",
+    val tmdbId: Int? = null,
+    val logoUrl: String = "",
+    val added: String? = null
 )
 
 @Entity(
     tableName = "series",
-    indices = [Index(value = ["playlistId", "categoryId"])]
+    indices = [
+        Index(value = ["playlistId", "categoryId"]),
+        Index(value = ["tmdbId"]),
+        Index(value = ["lastModified"])
+    ]
 )
 data class SeriesEntity(
     @PrimaryKey val id: String,
@@ -115,7 +127,11 @@ data class SeriesEntity(
     val cast: String = "",
     val releaseDate: String = "",
     val rating: Float = 0.0f,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val genre: String = "",
+    val tmdbId: Int? = null,
+    val logoUrl: String = "",
+    val lastModified: String? = null
 )
 
 @Entity(
