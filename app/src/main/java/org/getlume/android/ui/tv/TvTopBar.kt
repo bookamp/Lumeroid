@@ -76,8 +76,9 @@ fun TvTopBar(
         }
     } else null
 
-    LaunchedEffect(isTopBarFocused) {
+    LaunchedEffect(isTopBarFocused, currentScreen) {
         if (isTopBarFocused) {
+            kotlinx.coroutines.delay(16)
             try {
                 focusRequester.requestFocus()
             } catch (_: Exception) {}
@@ -234,6 +235,9 @@ private fun TvTopBarTextItem(
                         android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                             onMoveDown?.invoke() ?: false
                         }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            true
+                        }
                         android.view.KeyEvent.KEYCODE_BACK -> {
                             onBack?.invoke() ?: false
                         }
@@ -312,6 +316,9 @@ private fun TvTopBarIconItem(
                         }
                         android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
                             onMoveDown?.invoke() ?: false
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP -> {
+                            true
                         }
                         android.view.KeyEvent.KEYCODE_BACK -> {
                             onBack?.invoke() ?: false
