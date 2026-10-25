@@ -203,6 +203,10 @@ class AppSettings private constructor(context: Context) {
         } catch (_: Exception) { PlaylistSyncFrequency.DAYS_3 }
         set(value) = prefs.edit().putString("playlist_sync_frequency", value.name).apply()
 
+    var lastActivePlaylistId: String
+        get() = prefs.getString("last_active_playlist_id", "") ?: ""
+        set(value) = prefs.edit().putString("last_active_playlist_id", value).apply()
+
     var customEpgUrl: String
         get() = prefs.getString("custom_epg_url", "") ?: ""
         set(value) = prefs.edit().putString("custom_epg_url", value).apply()
@@ -440,13 +444,39 @@ class AppSettings private constructor(context: Context) {
         set(value) = prefs.edit().putLong("last_sports_refresh_date", value).apply()
 
     var homeSectionOrder: String
-        get() = prefs.getString("home_section_order", "recentlyWatched,favorites,forYou,trendingMovies,trendingSeries,traktWatchlist,simklWatchlist,sports")
-            ?: "recentlyWatched,favorites,forYou,trendingMovies,trendingSeries,traktWatchlist,simklWatchlist,sports"
+        get() = prefs.getString("home_section_order", "recentlyWatched,recentlyAdded,favorites,forYou,trendingMovies,trendingSeries,traktWatchlist,simklWatchlist,sports")
+            ?: "recentlyWatched,recentlyAdded,favorites,forYou,trendingMovies,trendingSeries,traktWatchlist,simklWatchlist,sports"
         set(value) = prefs.edit().putString("home_section_order", value).apply()
 
     var homeDisabledSections: Set<String>
         get() = prefs.getStringSet("home_disabled_sections", emptySet()) ?: emptySet()
         set(value) = prefs.edit().putStringSet("home_disabled_sections", value).apply()
+
+    fun getResolvedHomeSections(): List<String> {
+        val canonical = listOf(
+            "recentlyWatched", "recentlyAdded", "favorites", "forYou", "trendingMovies",
+            "trendingSeries", "traktWatchlist", "simklWatchlist", "sports"
+        )
+        val raw = homeSectionOrder.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val disabled = homeDisabledSections
+        val result = mutableListOf<String>()
+        val seen = mutableSetOf<String>()
+        for (key in raw) {
+            if (canonical.contains(key) && seen.add(key) && !disabled.contains(key)) {
+                result.add(key)
+            }
+        }
+        for (key in canonical) {
+            if (seen.add(key) && !disabled.contains(key)) {
+                result.add(key)
+            }
+        }
+        return result
+    }
+
+    var tmdbCustomApiKey: String
+        get() = prefs.getString("tmdb_custom_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("tmdb_custom_api_key", value.trim()).apply()
 
     fun isHomeSectionEnabled(sectionKey: String): Boolean {
         return !homeDisabledSections.contains(sectionKey)
@@ -512,6 +542,8 @@ class AppSettings private constructor(context: Context) {
             prefs.edit().putStringSet("home_content_languages", value).apply()
             cachedActiveLangs = null
             notifyChanged()
+            ContentFilterCache.rebuildAsync()
+            org.getlume.android.core.sync.HomeTrendingManager.clearCache()
         }
 
     fun isHomeContentLanguageEnabled(codeOrName: String): Boolean {
