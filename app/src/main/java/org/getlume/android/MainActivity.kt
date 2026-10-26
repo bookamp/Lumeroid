@@ -43,6 +43,28 @@ class MainActivity : ComponentActivity() {
                 val activePlaylist by db.playlistDao().observeActivePlaylist().collectAsState(initial = null)
                 val allChannels by db.channelDao().observeChannelsByPlaylist(activePlaylist?.id ?: "").collectAsState(initial = emptyList())
 
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        if (db.playlistDao().getActivePlaylist() == null) {
+                            val defaultPlaylist = org.getlume.android.core.data.entities.PlaylistEntity(
+                                id = "82f6e8d7-96c3-48c2-a1f1-2313fc8e7834",
+                                name = "My IPTV",
+                                type = "xtream",
+                                serverUrl = "http://192.168.1.235:8082",
+                                username = "appa",
+                                password = "amma",
+                                epgUrl = "",
+                                isActive = true
+                            )
+                            db.playlistDao().insertPlaylist(defaultPlaylist)
+                            db.playlistDao().setActivePlaylist(defaultPlaylist.id)
+                            org.getlume.android.core.settings.ContentFilterCache.rebuildAsync(defaultPlaylist.id)
+                            org.getlume.android.core.sync.PlaylistSyncManager.syncPlaylist(defaultPlaylist)
+                        }
+                    }
+                }
+
+
                 if (isTv) {
                     NavHost(navController = navController, startDestination = "tv_main") {
                         composable("tv_main") {
@@ -114,13 +136,28 @@ class MainActivity : ComponentActivity() {
                     NavHost(navController = navController, startDestination = "mobile_main") {
                         composable("mobile_main") {
                             MobileMainScreen(
-                                onPlayChannel = { channel ->
-                                    navController.navigate("mobile_player/${channel.id}")
+                                onPlayMedia = { media ->
+                                    ActivePlaybackStore.currentMedia = media
+                                    navController.navigate("mobile_player")
                                 },
-                                onOpenMultiView = {
-                                    navController.navigate("mobile_multiview")
+                                onPlayChannel = { channel ->
+                                    ActivePlaybackStore.currentMedia = channel.toPlayableMedia(lineup = allChannels)
+                                    navController.navigate("mobile_player")
                                 }
                             )
+                        }
+
+                        composable("mobile_player") {
+                            val media = ActivePlaybackStore.currentMedia
+                            if (media != null) {
+                                MobilePlayerScreen(
+                                    media = media,
+                                    channelLineup = allChannels,
+                                    onBack = { navController.popBackStack() }
+                                )
+                            } else {
+                                navController.popBackStack()
+                            }
                         }
 
                         composable(
@@ -132,7 +169,7 @@ class MainActivity : ComponentActivity() {
 
                             if (initialChannel != null) {
                                 MobilePlayerScreen(
-                                    initialChannel = initialChannel,
+                                    media = initialChannel.toPlayableMedia(lineup = allChannels),
                                     channelLineup = allChannels,
                                     onBack = { navController.popBackStack() }
                                 )
@@ -144,13 +181,6 @@ class MainActivity : ComponentActivity() {
                                     CircularProgressIndicator(color = LumeCyan)
                                 }
                             }
-                        }
-
-                        composable("mobile_multiview") {
-                            TvMultiViewScreen(
-                                initialChannel = allChannels.firstOrNull(),
-                                onBack = { navController.popBackStack() }
-                            )
                         }
                     }
                 }
