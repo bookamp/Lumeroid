@@ -738,8 +738,8 @@ fun TvHomeScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Icon(Icons.Default.Tv, contentDescription = null, tint = LumeTextSecondary, modifier = Modifier.size(64.dp))
-                    Text("No Playlists Connected", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Text("Add your IPTV playlist in Settings to populate your home feed.", color = LumeTextSecondary, fontSize = 15.sp)
+                    Text("No Playlists Connected", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("Add your IPTV playlist in Settings to populate your home feed.", color = LumeTextSecondary, fontSize = 11.5.sp)
                     Spacer(modifier = Modifier.height(8.dp))
                     TvShowcaseDetailsPill(
                         title = "Setup Playlist",
@@ -791,9 +791,9 @@ fun TvHomeScreen(
                                 Text(
                                     text = currentHero.title,
                                     color = Color.White,
-                                    fontSize = 26.sp,
+                                    fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
-                                    lineHeight = 30.sp,
+                                    lineHeight = 22.sp,
                                     letterSpacing = (-0.3).sp,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
@@ -825,8 +825,8 @@ fun TvHomeScreen(
                                 Text(
                                     text = currentHero.overview,
                                     color = Color.White.copy(alpha = 0.82f),
-                                    fontSize = 12.sp,
-                                    lineHeight = 17.sp,
+                                    fontSize = 11.5.sp,
+                                    lineHeight = 15.sp,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -1275,7 +1275,7 @@ private fun TvContentRail(
             Text(
                 text = title,
                 color = Color.White.copy(alpha = 0.90f),
-                fontSize = 13.5.sp,
+                fontSize = 12.5.sp,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -1437,7 +1437,7 @@ private fun TvForYouHomeRail(
                 )
                 Text(
                     text = "Watch, favorite, or rate titles and we'll suggest more here.",
-                    fontSize = 14.sp,
+                    fontSize = 11.5.sp,
                     color = Color.White.copy(alpha = 0.75f)
                 )
             }
