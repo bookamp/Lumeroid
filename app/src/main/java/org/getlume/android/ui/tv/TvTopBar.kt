@@ -99,9 +99,9 @@ fun TvTopBar(
                 .clip(RoundedCornerShape(32.dp))
                 .background(Color.Black.copy(alpha = 0.55f))
                 .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(32.dp))
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             // Search Icon Tab
             TvTopBarIconItem(
@@ -250,13 +250,13 @@ private fun TvTopBarTextItem(
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 14.dp, vertical = 5.dp),
+            .padding(horizontal = 11.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = title,
             color = textColor,
-            fontSize = 13.5.sp,
+            fontSize = 11.5.sp,
             fontWeight = if (isFocused || isSelected) FontWeight.Bold else FontWeight.Medium
         )
     }
@@ -302,7 +302,7 @@ private fun TvTopBarIconItem(
         modifier = Modifier
             .then(focusModifier)
             .scale(scale)
-            .size(32.dp)
+            .size(26.dp)
             .clip(CircleShape)
             .background(backgroundColor)
             .onPreviewKeyEvent { keyEvent ->
@@ -338,7 +338,7 @@ private fun TvTopBarIconItem(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = iconColor,
-            modifier = Modifier.size(15.dp)
+            modifier = Modifier.size(13.dp)
         )
     }
 }
