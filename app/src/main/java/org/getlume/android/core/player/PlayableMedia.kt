@@ -20,23 +20,36 @@ data class PlayableMedia(
     val durationMs: Long = 0L,
     val startPositionMs: Long = 0L,
     val contentType: String = "channel",
-    val seriesId: String = ""
+    val seriesId: String = "",
+    val categoryId: String = "",
+    val categoryName: String = "",
+    val channelLineup: List<ChannelEntity> = emptyList()
 )
 
-fun ChannelEntity.toPlayableMedia(): PlayableMedia {
+fun ChannelEntity.toPlayableMedia(
+    lineup: List<ChannelEntity> = emptyList(),
+    categoryName: String = ""
+): PlayableMedia {
     return PlayableMedia(
         id = id,
         title = name,
-        subtitle = "Channel $channelNumber",
+        subtitle = if (categoryName.isNotBlank()) categoryName else "Channel $channelNumber",
         streamUrl = streamUrl,
         posterUrl = logoUrl,
         isLive = true,
         channelNumber = channelNumber,
-        contentType = "channel"
+        contentType = "channel",
+        categoryId = categoryId,
+        categoryName = categoryName,
+        channelLineup = lineup
     )
 }
 
-fun ChannelEntity.toCatchupPlayableMedia(program: EpgListingEntity): PlayableMedia {
+fun ChannelEntity.toCatchupPlayableMedia(
+    program: EpgListingEntity,
+    lineup: List<ChannelEntity> = emptyList(),
+    categoryName: String = ""
+): PlayableMedia {
     val durationSec = ((program.endTime - program.startTime) / 1000L).coerceAtLeast(60L)
     val startSec = program.startTime / 1000L
     val catchupUrl = when (catchupType) {
@@ -53,7 +66,10 @@ fun ChannelEntity.toCatchupPlayableMedia(program: EpgListingEntity): PlayableMed
         isLive = false,
         channelNumber = channelNumber,
         durationMs = (program.endTime - program.startTime).coerceAtLeast(60000L),
-        contentType = "channel"
+        contentType = "channel",
+        categoryId = categoryId,
+        categoryName = categoryName,
+        channelLineup = lineup
     )
 }
 
