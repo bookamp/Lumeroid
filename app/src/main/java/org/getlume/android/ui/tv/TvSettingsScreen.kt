@@ -67,8 +67,7 @@ import java.util.UUID
 
 /**
  * Top-level Settings Categories matching Apple TV SettingsCategory.swift exactly:
- * 1. PREMIUM ("Lume Pro")
- * 2. PROFILES ("Profiles")
+ * 1. PROFILES ("Profiles")
  * 3. PLAYLISTS ("Playlists")
  * 4. EPG ("TV Guide")
  * 5. LIBRARY ("Library")
@@ -83,7 +82,6 @@ import java.util.UUID
  * 14. ABOUT ("About")
  */
 enum class SettingsCategory(val id: String, val title: String) {
-    PREMIUM("premium", "Lume Pro"),
     PROFILES("profiles", "Profiles"),
     PLAYLISTS("playlists", "Playlists"),
     EPG("epg", "TV Guide"),
@@ -360,7 +358,6 @@ fun TvSettingsScreen(
                     null -> {
                         // Render Top-Level Category Pane
                         when (selectedCategory) {
-                            SettingsCategory.PREMIUM -> TvPremiumSettingsPane()
                             SettingsCategory.PROFILES -> TvProfilesSettingsPane(
                                 targetFocusProfileId = returnFocusProfileId,
                                 onFocusConsumed = { returnFocusProfileId = null },
@@ -514,137 +511,7 @@ private fun TvCategoryRailItem(
     }
 }
 
-// ==========================================
-// PANE 1: LUME PRO (Authentic SettingsView+Premium.swift)
-// ==========================================
-@Composable
-private fun TvPremiumSettingsPane() {
-    val settings = remember { AppSettings.get() }
-    var isPro by remember { mutableStateOf(settings.isPremium) }
 
-    // All 10 Features from PremiumFeature.swift
-    val features = listOf(
-        Pair("Unlimited Playlists", "Add as many IPTV playlists as you like and switch between them."),
-        Pair("Offline Downloads", "Save movies and episodes to watch offline, anywhere."),
-        Pair("Multiple Profiles", "Give everyone their own watch history, progress and favorites."),
-        Pair("Trakt & Simkl Sync", "Scrobble what you watch to Trakt or Simkl, import your history and surface your watchlist on Home."),
-        Pair("Smart Playback", "Autoplay the next episode, skip intros, and jump ahead with one tap."),
-        Pair("For You Recommendations", "Get an on-device \"For You\" row tuned to your taste from your library and what you watch."),
-        Pair("Multi-View", "Watch up to four live channels side by side across your playlists."),
-        Pair("Guide Preview", "Preview the focused channel, muted, right in the TV Guide."),
-        Pair("Sports Hub", "Follow your leagues and teams — fixtures, live scores, standings and one tap to the channel."),
-        Pair("Recording Server", "Record live TV and schedule shows from the guide on your own LumeRecorder server.")
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(36.dp)
-    ) {
-        // Section: Lume Pro Status
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TvSettingsSectionLabel("Lume Pro")
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
-                    .background(Color.White.copy(alpha = 0.05f))
-                    .padding(22.dp)
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(18.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color.White.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.Star, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
-                        }
-
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(if (isPro) "Lume Pro" else "Free Plan", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                if (isPro) "Lifetime Access • All Features Unlocked" else "Upgrade to unlock the features below",
-                                color = Color.White.copy(alpha = 0.55f),
-                                fontSize = 15.sp
-                            )
-                        }
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        if (!isPro) {
-                            TvSettingsActionButton(
-                                title = "Upgrade to Premium",
-                                icon = Icons.Default.Star,
-                                prominent = true,
-                                onClick = {
-                                    isPro = true
-                                    settings.isPremium = true
-                                }
-                            )
-                            TvSettingsActionButton(
-                                title = "Restore Purchases",
-                                icon = Icons.Default.Refresh,
-                                onClick = {
-                                    isPro = true
-                                    settings.isPremium = true
-                                }
-                            )
-                        } else {
-                            TvSettingsActionButton(
-                                title = "Manage Subscription",
-                                onClick = {
-                                    isPro = false
-                                    settings.isPremium = false
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Section: Features 2-column Grid across full width
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            TvSettingsSectionLabel(if (isPro) "Included" else "Premium Features")
-
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                for (chunk in features.chunked(2)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(20.dp)
-                    ) {
-                        for (item in chunk) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
-                                    .background(Color.White.copy(alpha = 0.05f))
-                                    .padding(horizontal = 20.dp, vertical = 16.dp)
-                            ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(item.first, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                                    Text(item.second, color = Color.White.copy(alpha = 0.55f), fontSize = 14.sp, lineHeight = 19.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 // ==========================================
 // PANE 2: PROFILES (Authentic SettingsView+Profiles.swift)
@@ -1677,14 +1544,12 @@ private fun TvPlaylistsSettingsPane(
             Column(modifier = Modifier.padding(top = 4.dp)) {
                 TvSettingsRow(
                     title = "Add Playlist",
-                    showsPremiumBadge = !settings.isPremium && playlists.isNotEmpty(),
                     onClick = onOpenAddPlaylist
                 )
             }
 
             TvSettingsFooter(
-                if (!settings.isPremium) "Free includes one playlist. Upgrade to Lume Pro to add more."
-                else "Switching playlist changes the content shown across Home, Movies, Series and Live TV."
+                "Switching playlist changes the content shown across Home, Movies, Series and Live TV."
             )
         }
 
