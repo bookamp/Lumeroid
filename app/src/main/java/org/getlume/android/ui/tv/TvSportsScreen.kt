@@ -1,10 +1,8 @@
 package org.getlume.android.ui.tv
 
-import kotlinx.coroutines.delay
-
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,11 +12,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -27,35 +27,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.ui.input.key.*
-import androidx.compose.ui.input.key.KeyEvent
 import org.getlume.android.LumeApp
 import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.designsystem.*
-import org.getlume.android.core.designsystem.TvFocusRescue
 import org.getlume.android.core.network.ESPNClient
 import org.getlume.android.core.network.SportsFixture
 import org.getlume.android.core.player.PlayableMedia
 import org.getlume.android.core.player.toPlayableMedia
 import org.getlume.android.core.sports.SportsChannelResolver
 
-/**
- * Authentic Apple TV Sports Hub Screen for Android TV.
- * Live scores with real-time automatic matching against the user's IPTV playlist channels.
- */
 @Composable
 fun TvSportsScreen(
     onPlayMedia: (PlayableMedia) -> Unit,
@@ -71,7 +67,8 @@ fun TvSportsScreen(
     var selectedLeague by remember { mutableStateOf("soccer/eng.1") }
     var fixtures by remember { mutableStateOf<List<SportsFixture>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
-    var isInFixturesPane by remember { mutableStateOf(false) }
+    var selectedFixtureForChannels by remember { mutableStateOf<SportsFixture?>(null) }
+    var isInContentPane by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
     DisposableEffect(firstItemFocusRequester) {
@@ -81,22 +78,16 @@ fun TvSportsScreen(
         }
     }
 
-
-
-    // Breadcrumb BackHandler: consolidated single handler prevents race conditions
     BackHandler(enabled = !isTopBarFocused) {
-        if (isInFixturesPane) {
-            isInFixturesPane = false
-            var success = false
+        if (selectedFixtureForChannels != null) {
+            selectedFixtureForChannels = null
+        } else if (isInContentPane) {
+            isInContentPane = false
             for (i in 0..5) {
                 try {
-                    if (firstItemFocusRequester.requestFocus()) {
-                        success = true
-                        break
-                    }
+                    if (firstItemFocusRequester.requestFocus()) break
                 } catch (_: Exception) {}
             }
-            if (!success) onMoveUpToTopBar?.invoke()
         } else {
             onMoveUpToTopBar?.invoke()
         }
@@ -110,7 +101,10 @@ fun TvSportsScreen(
             "basketball/nba" to "NBA",
             "football/nfl" to "NFL",
             "baseball/mlb" to "MLB",
-            "hockey/nhl" to "NHL"
+            "hockey/nhl" to "NHL",
+            "tennis/atp" to "Tennis",
+            "cricket" to "Cricket",
+            "racing/f1" to "Formula 1"
         )
     }
 
@@ -126,117 +120,314 @@ fun TvSportsScreen(
         loadScores(selectedLeague)
     }
 
+    // 3 distinct categories: Final, Live, Upcoming
+    val liveFixtures = remember(fixtures) {
+        fixtures.filter { it.isLive }
+    }
+    val finalFixtures = remember(fixtures) {
+        fixtures.filter { fixture ->
+            !fixture.isLive && (
+                fixture.statusText.contains("Final", ignoreCase = true) ||
+                fixture.statusText.contains("FT", ignoreCase = true) ||
+                fixture.statusText.equals("F", ignoreCase = true) ||
+                (fixture.homeTeamScore.isNotBlank() && fixture.homeTeamScore != "-")
+            )
+        }
+    }
+    val upcomingFixtures = remember(fixtures) {
+        fixtures.filter { fixture ->
+            !fixture.isLive && !finalFixtures.contains(fixture)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF07090E))
-            .padding(top = 80.dp, start = 48.dp, end = 48.dp, bottom = 24.dp)
+            .padding(top = 65.dp, start = 40.dp, end = 40.dp, bottom = 16.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Header: Title & League selector
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            // League Selector Pills (without redundant label)
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { if (it.hasFocus) isInContentPane = false },
+                contentPadding = PaddingValues(horizontal = 2.dp)
             ) {
-                Column {
-                    Text("Sports Hub", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("Live scores & auto-matched IPTV streams", color = LumeTextSecondary, fontSize = 11.5.sp)
-                }
+                itemsIndexed(leagues) { _, (code, title) ->
+                    val isSelected = selectedLeague == code
+                    val interaction = remember { MutableInteractionSource() }
+                    val isFocused by interaction.collectIsFocusedAsState()
+                    val itemFocusRequester = if (isSelected) firstItemFocusRequester else null
 
-                // League Selector Pills
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.onFocusChanged { if (it.hasFocus) isInFixturesPane = false }
-                ) {
-                    itemsIndexed(leagues) { index, (code, title) ->
-                        val isSelected = selectedLeague == code
-                        val interaction = remember { MutableInteractionSource() }
-                        val isFocused by interaction.collectIsFocusedAsState()
-                        val itemFocusRequester = if (isSelected) {
-                            firstItemFocusRequester
-                        } else null
-
-                        Box(
-                            modifier = Modifier
-                                .then(if (itemFocusRequester != null) Modifier.focusRequester(itemFocusRequester) else Modifier)
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(if (isSelected || isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.10f))
-                                .onPreviewKeyEvent { keyEvent ->
-                                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
-                                        if (onMoveUpToTopBar != null) {
-                                            onMoveUpToTopBar()
-                                            true
-                                        } else false
-                                    } else false
+                    Box(
+                        modifier = Modifier
+                            .then(if (itemFocusRequester != null) Modifier.focusRequester(itemFocusRequester) else Modifier)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(
+                                when {
+                                    isFocused -> Color.White
+                                    isSelected -> Color.White.copy(alpha = 0.22f)
+                                    else -> Color.White.copy(alpha = 0.08f)
                                 }
-                                .clickable(interactionSource = interaction, indication = null) {
-                                    selectedLeague = code
-                                }
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = title,
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
                             )
-                        }
+                            .onPreviewKeyEvent { keyEvent ->
+                                if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
+                                    if (onMoveUpToTopBar != null) {
+                                        onMoveUpToTopBar()
+                                        true
+                                    } else false
+                                } else false
+                            }
+                            .clickable(interactionSource = interaction, indication = null) {
+                                selectedLeague = code
+                            }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = title,
+                            color = if (isFocused) Color.Black else Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
+                        )
                     }
                 }
             }
 
-            // Main Content: Fixtures with Matched IPTV Channels
+            // Body: Loading / Empty / 3 Named Kanban Columns
             if (isLoading) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .onFocusChanged { if (it.hasFocus) isInFixturesPane = true },
+                        .fillMaxWidth()
+                        .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = LumeAccentBlue)
+                    CircularProgressIndicator(color = LumeAccentBlue, modifier = Modifier.size(32.dp))
                 }
             } else if (fixtures.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .onFocusChanged { if (it.hasFocus) isInFixturesPane = true },
+                        .fillMaxWidth()
+                        .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("No live matches right now for this competition", color = LumeTextSecondary, fontSize = 16.sp)
+                        Text(
+                            text = "No games scheduled for this competition",
+                            color = LumeTextSecondary,
+                            fontSize = 13.sp
+                        )
                         TvSettingsActionButton(
-                            title = "Refresh Scores",
+                            title = "Refresh",
                             icon = Icons.Default.Refresh,
                             onClick = { loadScores(selectedLeague) }
                         )
                     }
                 }
             } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .onFocusChanged { if (it.hasFocus) isInContentPane = true },
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Column 1: Final (Graphite / Slate shade)
+                    SportsKanbanColumn(
+                        title = "FINAL",
+                        titleColor = Color(0xFF94A3B8),
+                        fixtures = finalFixtures,
+                        emptyText = "No completed games",
+                        columnBg = Color(0xFF10141D).copy(alpha = 0.50f),
+                        cardGradient = listOf(Color(0xFF161B24), Color(0xFF0F1218)),
+                        cardBorder = Color.White.copy(alpha = 0.08f),
+                        allChannels = allChannels,
+                        onFixtureClick = { fixture, channels ->
+                            if (channels.size == 1) {
+                                onPlayMedia(channels[0].toPlayableMedia())
+                            } else if (channels.size > 1) {
+                                selectedFixtureForChannels = fixture
+                            }
+                        },
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+
+                    // Column 2: Live (Crimson / Live Red shade)
+                    SportsKanbanColumn(
+                        title = "LIVE",
+                        titleColor = LumeLiveRed,
+                        isLive = true,
+                        fixtures = liveFixtures,
+                        emptyText = "No games live right now",
+                        columnBg = Color(0xFF1B0F12).copy(alpha = 0.50f),
+                        cardGradient = listOf(Color(0xFF261217), Color(0xFF160A0D)),
+                        cardBorder = LumeLiveRed.copy(alpha = 0.22f),
+                        allChannels = allChannels,
+                        onFixtureClick = { fixture, channels ->
+                            if (channels.size == 1) {
+                                onPlayMedia(channels[0].toPlayableMedia())
+                            } else if (channels.size > 1) {
+                                selectedFixtureForChannels = fixture
+                            }
+                        },
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+
+                    // Column 3: Upcoming (Deep Sapphire / Navy shade)
+                    SportsKanbanColumn(
+                        title = "UPCOMING",
+                        titleColor = LumeAccentBlue,
+                        fixtures = upcomingFixtures,
+                        emptyText = "No upcoming games",
+                        columnBg = Color(0xFF0D1522).copy(alpha = 0.50f),
+                        cardGradient = listOf(Color(0xFF121B2B), Color(0xFF0A0F19)),
+                        cardBorder = LumeAccentBlue.copy(alpha = 0.20f),
+                        allChannels = allChannels,
+                        onFixtureClick = { fixture, channels ->
+                            if (channels.size == 1) {
+                                onPlayMedia(channels[0].toPlayableMedia())
+                            } else if (channels.size > 1) {
+                                selectedFixtureForChannels = fixture
+                            }
+                        },
+                        modifier = Modifier.weight(1f).fillMaxHeight()
+                    )
+                }
+            }
+        }
+    }
+
+    // Modal channel picker when multiple streams exist for a match
+    selectedFixtureForChannels?.let { fixture ->
+        val channels = remember(fixture, allChannels) {
+            SportsChannelResolver.resolveChannelsForFixture(fixture, allChannels, limit = 8)
+        }
+        TvSportsChannelDialog(
+            fixture = fixture,
+            channels = channels,
+            onSelect = { channel ->
+                selectedFixtureForChannels = null
+                onPlayMedia(channel.toPlayableMedia())
+            },
+            onDismiss = { selectedFixtureForChannels = null }
+        )
+    }
+}
+
+/**
+ * Single named column in the 3-column Sports grid with its own color theme.
+ */
+@Composable
+private fun SportsKanbanColumn(
+    title: String,
+    titleColor: Color,
+    fixtures: List<SportsFixture>,
+    emptyText: String,
+    columnBg: Color,
+    cardGradient: List<Color>,
+    cardBorder: Color,
+    allChannels: List<ChannelEntity>,
+    onFixtureClick: (SportsFixture, List<ChannelEntity>) -> Unit,
+    isLive: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(columnBg)
+            .border(1.dp, Color.White.copy(alpha = 0.06f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 10.dp, vertical = 12.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Column Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (isLive) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(LumeLiveRed)
+                        )
+                    }
+                    Text(
+                        text = title,
+                        color = titleColor,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                }
+
+                // Count badge
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "${fixtures.size}",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            // Fixtures in this column
+            if (fixtures.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = emptyText,
+                        color = Color.White.copy(alpha = 0.35f),
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
                 LazyColumn(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .onFocusChanged { if (it.hasFocus) isInFixturesPane = true },
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    contentPadding = PaddingValues(bottom = 36.dp)
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp)
                 ) {
-                    items(fixtures) { fixture ->
-                        val matchedChannels = remember(fixture, allChannels) {
-                            SportsChannelResolver.resolveChannelsForFixture(fixture, allChannels, limit = 4)
+                    items(fixtures, key = { it.id }) { fixture ->
+                        val channels = remember(fixture, allChannels) {
+                            SportsChannelResolver.resolveChannelsForFixture(fixture, allChannels, limit = 6)
                         }
-
-                        TvFixtureCard(
+                        TvKanbanCard(
                             fixture = fixture,
-                            matchedChannels = matchedChannels,
-                            onPlayChannel = { channel ->
-                                onPlayMedia(channel.toPlayableMedia())
-                            }
+                            channels = channels,
+                            cardGradient = cardGradient,
+                            cardBorder = cardBorder,
+                            isLive = isLive,
+                            onClick = { onFixtureClick(fixture, channels) }
                         )
                     }
                 }
@@ -245,155 +436,299 @@ fun TvSportsScreen(
     }
 }
 
+/**
+ * Card inside a Kanban column styled with specific column shades.
+ */
 @Composable
-private fun TvFixtureCard(
+private fun TvKanbanCard(
     fixture: SportsFixture,
-    matchedChannels: List<ChannelEntity>,
-    onPlayChannel: (ChannelEntity) -> Unit
+    channels: List<ChannelEntity>,
+    cardGradient: List<Color>,
+    cardBorder: Color,
+    isLive: Boolean,
+    onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
-    val scale by animateFloatAsState(targetValue = if (isFocused) 1.02f else 1.0f, label = "fixScale")
+    val scale by animateFloatAsState(
+        targetValue = if (isFocused) 1.03f else 1.0f,
+        animationSpec = tween(130),
+        label = "kanbanCardScale"
+    )
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .height(138.dp)
+            .zIndex(if (isFocused) 1f else 0f)
             .scale(scale)
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (isFocused) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.05f))
-            .border(
-                width = if (isFocused) 2.dp else 1.dp,
-                color = if (isFocused) LumeAccentBlue else Color.White.copy(alpha = 0.09f),
-                shape = RoundedCornerShape(18.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                Brush.linearGradient(
+                    colors = if (isFocused) listOf(
+                        Color(0xFF263244),
+                        Color(0xFF18202E)
+                    ) else cardGradient
+                )
             )
-            .padding(20.dp)
+            .border(
+                width = if (isFocused) 2.5.dp else 1.dp,
+                color = if (isFocused) Color.White else cardBorder,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 12.dp, vertical = 9.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            // Row 1: Matchup Details
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Top Row: League name + status
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Home Team
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    Text(
-                        text = fixture.homeTeamName,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.End,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    if (fixture.homeTeamLogo.isNotBlank()) {
-                        AsyncImage(
-                            model = fixture.homeTeamLogo,
-                            contentDescription = fixture.homeTeamName,
-                            modifier = Modifier.size(36.dp)
+                Text(
+                    text = fixture.leagueName.take(16).uppercase(),
+                    color = Color.White.copy(alpha = 0.45f),
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp,
+                    maxLines = 1
+                )
+
+                if (isLive || fixture.isLive) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(LumeLiveRed)
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "LIVE",
+                            color = Color.White,
+                            fontSize = 7.5.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
-                }
-
-                // Score / Status in Center
-                Column(
-                    modifier = Modifier.width(160.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "${fixture.homeTeamScore} - ${fixture.awayTeamScore}",
-                        color = Color.White,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Black
-                    )
+                } else if (fixture.statusText.isNotBlank()) {
                     Text(
                         text = fixture.statusText,
-                        color = if (fixture.isLive) LumeLiveRed else LumeTextSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                // Away Team
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start
-                ) {
-                    if (fixture.awayTeamLogo.isNotBlank()) {
-                        AsyncImage(
-                            model = fixture.awayTeamLogo,
-                            contentDescription = fixture.awayTeamName,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = fixture.awayTeamName,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Start,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
+                        color = Color.White.copy(alpha = 0.55f),
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
 
-            // Row 2: Matched IPTV Channels (Click-to-Watch)
-            if (matchedChannels.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "ON AIR ON:",
-                        color = LumeTextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
+            // Middle: Logos & Score / VS
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                // Home Logo
+                if (fixture.homeTeamLogo.isNotBlank()) {
+                    AsyncImage(
+                        model = fixture.homeTeamLogo,
+                        contentDescription = fixture.homeTeamName,
+                        modifier = Modifier.size(34.dp),
+                        contentScale = ContentScale.Fit
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.1f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(fixture.homeTeamName.take(2).uppercase(), color = Color.White, fontSize = 9.sp)
+                    }
+                }
 
-                    matchedChannels.forEach { channel ->
-                        val chipInteraction = remember { MutableInteractionSource() }
-                        val isChipFocused by chipInteraction.collectIsFocusedAsState()
+                // Score or VS
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (fixture.homeTeamScore.isNotBlank() && fixture.homeTeamScore != "-") {
+                        Text(
+                            text = "${fixture.homeTeamScore} - ${fixture.awayTeamScore}",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    } else {
+                        Text(
+                            text = "VS",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Away Logo
+                if (fixture.awayTeamLogo.isNotBlank()) {
+                    AsyncImage(
+                        model = fixture.awayTeamLogo,
+                        contentDescription = fixture.awayTeamName,
+                        modifier = Modifier.size(34.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.1f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(fixture.awayTeamName.take(2).uppercase(), color = Color.White, fontSize = 9.sp)
+                    }
+                }
+            }
+
+            // Team Names
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = fixture.homeTeamName,
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Start
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = fixture.awayTeamName,
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.End
+                )
+            }
+
+            // Bottom Row: Matched Playlist Channel Pill
+            if (channels.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(if (isFocused) Color.White.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.06f))
+                        .padding(horizontal = 6.dp, vertical = 2.5.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = LumeAccentBlue,
+                            modifier = Modifier.size(10.dp)
+                        )
+                        val channelLabel = if (channels.size == 1) {
+                            channels[0].name
+                        } else {
+                            "${channels[0].name} (+${channels.size - 1})"
+                        }
+                        Text(
+                            text = channelLabel,
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.height(2.dp))
+            }
+        }
+    }
+}
+
+/**
+ * TV Channel Selection Dialog when a game is airing across multiple streams.
+ */
+@Composable
+private fun TvSportsChannelDialog(
+    fixture: SportsFixture,
+    channels: List<ChannelEntity>,
+    onSelect: (ChannelEntity) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .width(460.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF141923))
+                .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+                .padding(20.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "${fixture.homeTeamName} vs ${fixture.awayTeamName}",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Select a channel to watch live",
+                        color = LumeTextSecondary,
+                        fontSize = 11.5.sp
+                    )
+                }
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.heightIn(max = 260.dp)
+                ) {
+                    items(channels) { channel ->
+                        val interaction = remember { MutableInteractionSource() }
+                        val isFocused by interaction.collectIsFocusedAsState()
 
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isChipFocused) Color.White else LumeAccentBlue.copy(alpha = 0.25f))
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isChipFocused) Color.White else LumeAccentBlue.copy(alpha = 0.6f),
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .clickable(interactionSource = chipInteraction, indication = null) {
-                                    onPlayChannel(channel)
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isFocused) Color.White else Color.White.copy(alpha = 0.08f))
+                                .clickable(interactionSource = interaction, indication = null) {
+                                    onSelect(channel)
                                 }
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.PlayArrow,
+                                    imageVector = Icons.Default.Tv,
                                     contentDescription = null,
-                                    tint = if (isChipFocused) Color.Black else LumeAccentBlue,
-                                    modifier = Modifier.size(14.dp)
+                                    tint = if (isFocused) Color.Black else LumeAccentBlue,
+                                    modifier = Modifier.size(16.dp)
                                 )
                                 Text(
                                     text = channel.name,
-                                    color = if (isChipFocused) Color.Black else Color.White,
+                                    color = if (isFocused) Color.Black else Color.White,
                                     fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    fontWeight = FontWeight.Medium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
