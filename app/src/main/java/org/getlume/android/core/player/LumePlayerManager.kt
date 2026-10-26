@@ -39,6 +39,14 @@ class LumePlayerManager(private val context: Context) {
                         _isPlaying.value = playbackState == Player.STATE_READY && playWhenReady
                     }
 
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        _isPlaying.value = isPlaying
+                    }
+
+                    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                        _isPlaying.value = playWhenReady
+                    }
+
                     override fun onTracksChanged(tracks: Tracks) {
                         extractTracks(tracks)
                     }
@@ -73,6 +81,7 @@ class LumePlayerManager(private val context: Context) {
         player.setMediaItem(mediaItem, startPositionMs)
         player.prepare()
         player.play()
+        _isPlaying.value = true
     }
 
     fun playChannel(channel: ChannelEntity) {
@@ -94,12 +103,11 @@ class LumePlayerManager(private val context: Context) {
         player.seekTo(target)
     }
 
-    fun togglePlayPause() {
-        if (player.isPlaying) {
-            player.pause()
-        } else {
-            player.play()
-        }
+    fun togglePlayPause(): Boolean {
+        val target = !player.playWhenReady
+        player.playWhenReady = target
+        _isPlaying.value = target
+        return target
     }
 
     fun playCatchup(channel: ChannelEntity, startEpochMs: Long, durationSeconds: Long) {
@@ -142,11 +150,53 @@ class LumePlayerManager(private val context: Context) {
     }
 
     fun selectAudioTrack(trackIndex: Int) {
-        // override track
+        val tracks = player.currentTracks
+        var currentAudioIndex = 0
+        tracks.groups.forEach { group ->
+            if (group.type == C.TRACK_TYPE_AUDIO) {
+                for (i in 0 until group.length) {
+                    if (currentAudioIndex == trackIndex) {
+                        player.trackSelectionParameters = player.trackSelectionParameters
+                            .buildUpon()
+                            .setOverrideForType(
+                                TrackSelectionOverride(group.mediaTrackGroup, i)
+                            )
+                            .build()
+                        return
+                    }
+                    currentAudioIndex++
+                }
+            }
+        }
     }
 
     fun selectSubtitleTrack(trackIndex: Int) {
-        // override track
+        if (trackIndex < 0) {
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                .build()
+            return
+        }
+        val tracks = player.currentTracks
+        var currentSubIndex = 0
+        tracks.groups.forEach { group ->
+            if (group.type == C.TRACK_TYPE_TEXT) {
+                for (i in 0 until group.length) {
+                    if (currentSubIndex == trackIndex) {
+                        player.trackSelectionParameters = player.trackSelectionParameters
+                            .buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .setOverrideForType(
+                                TrackSelectionOverride(group.mediaTrackGroup, i)
+                            )
+                            .build()
+                        return
+                    }
+                    currentSubIndex++
+                }
+            }
+        }
     }
 
     fun release() {
