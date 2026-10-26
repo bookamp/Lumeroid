@@ -23,64 +23,47 @@ class LiveChannelNavigatorTest {
     }
 
     @Test
-    fun testRockerModeNextAndPrevious() {
+    fun testNavigationWithBoundaryClamping() {
         val ch1 = createChannel("1", 1, "Channel 1")
         val ch2 = createChannel("2", 2, "Channel 2")
         val ch3 = createChannel("3", 3, "Channel 3")
         val lineup = listOf(ch1, ch2, ch3)
 
-        // UP moves to next higher channel in CHANNEL_UP_DOWN mode
-        val next = LiveChannelNavigator.nextChannel(
+        // UP from first channel is disabled (returns null)
+        val upFromFirst = LiveChannelNavigator.nextChannel(
             current = ch1,
             lineup = lineup,
-            direction = RemoteDirectionGate.Direction.UP,
-            mode = LiveSurfMode.CHANNEL_UP_DOWN
+            direction = RemoteDirectionGate.Direction.UP
         )
-        assertEquals(ch2.id, next.id)
+        assertNull(upFromFirst)
+        assertFalse(LiveChannelNavigator.canChannelUp(ch1, lineup))
 
-        // DOWN moves to previous lower channel
-        val prev = LiveChannelNavigator.nextChannel(
+        // DOWN from first channel moves to second
+        val downFromFirst = LiveChannelNavigator.nextChannel(
+            current = ch1,
+            lineup = lineup,
+            direction = RemoteDirectionGate.Direction.DOWN
+        )
+        assertEquals(ch2.id, downFromFirst?.id)
+        assertTrue(LiveChannelNavigator.canChannelDown(ch1, lineup))
+
+        // UP from second channel moves to first
+        val upFromSecond = LiveChannelNavigator.nextChannel(
             current = ch2,
             lineup = lineup,
-            direction = RemoteDirectionGate.Direction.DOWN,
-            mode = LiveSurfMode.CHANNEL_UP_DOWN
+            direction = RemoteDirectionGate.Direction.UP
         )
-        assertEquals(ch1.id, prev.id)
+        assertEquals(ch1.id, upFromSecond?.id)
+        assertTrue(LiveChannelNavigator.canChannelUp(ch2, lineup))
 
-        // DOWN from first wraps around to last
-        val wrapped = LiveChannelNavigator.nextChannel(
-            current = ch1,
+        // DOWN from last channel is disabled (returns null)
+        val downFromLast = LiveChannelNavigator.nextChannel(
+            current = ch3,
             lineup = lineup,
-            direction = RemoteDirectionGate.Direction.DOWN,
-            mode = LiveSurfMode.CHANNEL_UP_DOWN
+            direction = RemoteDirectionGate.Direction.DOWN
         )
-        assertEquals(ch3.id, wrapped.id)
-    }
-
-    @Test
-    fun testListOrderModeNavigation() {
-        val ch1 = createChannel("1", 1, "Top Channel")
-        val ch2 = createChannel("2", 2, "Middle Channel")
-        val ch3 = createChannel("3", 3, "Bottom Channel")
-        val lineup = listOf(ch1, ch2, ch3)
-
-        // In LIST_ORDER mode, DOWN moves down the list (+1 index)
-        val nextInList = LiveChannelNavigator.nextChannel(
-            current = ch1,
-            lineup = lineup,
-            direction = RemoteDirectionGate.Direction.DOWN,
-            mode = LiveSurfMode.LIST_ORDER
-        )
-        assertEquals(ch2.id, nextInList.id)
-
-        // In LIST_ORDER mode, UP moves up the list (-1 index)
-        val prevInList = LiveChannelNavigator.nextChannel(
-            current = ch2,
-            lineup = lineup,
-            direction = RemoteDirectionGate.Direction.UP,
-            mode = LiveSurfMode.LIST_ORDER
-        )
-        assertEquals(ch1.id, prevInList.id)
+        assertNull(downFromLast)
+        assertFalse(LiveChannelNavigator.canChannelDown(ch3, lineup))
     }
 
     @Test
@@ -88,13 +71,13 @@ class LiveChannelNavigatorTest {
         val ch1 = createChannel("1", 1, "Channel 1")
         val nonExistent = createChannel("999", 999, "Alien")
 
-        // Empty lineup returns current channel
+        // Empty lineup returns null
         val resultEmpty = LiveChannelNavigator.nextChannel(
             current = ch1,
             lineup = emptyList(),
             direction = RemoteDirectionGate.Direction.UP
         )
-        assertEquals(ch1.id, resultEmpty.id)
+        assertNull(resultEmpty)
 
         // Missing channel in lineup falls back to first
         val resultFallback = LiveChannelNavigator.nextChannel(
@@ -102,6 +85,6 @@ class LiveChannelNavigatorTest {
             lineup = listOf(ch1),
             direction = RemoteDirectionGate.Direction.UP
         )
-        assertEquals(ch1.id, resultFallback.id)
+        assertEquals(ch1.id, resultFallback?.id)
     }
 }
