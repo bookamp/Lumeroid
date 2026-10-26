@@ -207,11 +207,11 @@ fun TvPosterCard(
             Text(
                 text = title,
                 color = if (isFocused) Color.White else Color.White.copy(alpha = 0.85f),
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                lineHeight = 16.sp
+                lineHeight = 14.sp
             )
         }
     }
@@ -324,7 +324,7 @@ fun TvCategoryTile(
         Text(
             text = name,
             color = if (isFocused) Color.Black else Color.White,
-            fontSize = 15.sp,
+            fontSize = 11.5.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             textAlign = TextAlign.Center,
@@ -352,7 +352,7 @@ fun TvGenreGridSection(
         Text(
             text = title,
             color = LumeTextSecondary,
-            fontSize = 15.sp,
+            fontSize = 12.5.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.5.sp,
             modifier = Modifier.padding(horizontal = 36.dp)
@@ -407,7 +407,7 @@ fun TvCategoryGridSection(
         Text(
             text = title,
             color = LumeTextSecondary,
-            fontSize = 15.sp,
+            fontSize = 12.5.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.5.sp,
             modifier = Modifier.padding(horizontal = 36.dp)
@@ -465,7 +465,7 @@ fun TvBrowseRow(
             Text(
                 text = title,
                 color = LumeTextSecondary,
-                fontSize = 15.sp,
+                fontSize = 12.5.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
@@ -517,13 +517,13 @@ fun TvClosePill(
                 } else false
             }
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 7.dp),
+            .padding(horizontal = 14.dp, vertical = 5.5.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
             color = if (isFocused) Color.Black else Color.White,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold
         )
     }
@@ -597,7 +597,7 @@ fun TvCategoryContentGridScreen(
             Text(
                 text = title,
                 color = Color.White,
-                fontSize = 26.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
 
@@ -634,7 +634,7 @@ fun TvCategoryContentGridScreen(
                         Text(
                             text = emptyMessage,
                             color = LumeTextSecondary,
-                            fontSize = 15.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
                         TvClosePill(
@@ -726,56 +726,56 @@ fun TvMovieDetailSheet(
             Text(
                 text = movie.name,
                 color = Color.White,
-                fontSize = 36.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
-                lineHeight = 42.sp
+                lineHeight = 22.sp
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Metadata row
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (movie.rating > 0f) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(16.dp))
-                        Text(String.format(Locale.US, "%.1f", movie.rating), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(13.dp))
+                        Text(String.format(Locale.US, "%.1f", movie.rating), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
                 if (movie.releaseDate.isNotBlank()) {
-                    Text(movie.releaseDate, color = LumeTextSecondary, fontSize = 15.sp)
+                    Text(movie.releaseDate, color = LumeTextSecondary, fontSize = 11.sp)
                 }
 
                 if (movie.durationMinutes > 0) {
-                    Text("${movie.durationMinutes} min", color = LumeTextSecondary, fontSize = 15.sp)
+                    Text("${movie.durationMinutes} min", color = LumeTextSecondary, fontSize = 11.sp)
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Plot synopsis
             Text(
                 text = if (movie.plot.isNotBlank()) movie.plot else "Watch this movie directly from your IPTV service on Lume.",
                 color = Color.White.copy(alpha = 0.80f),
-                fontSize = 15.sp,
-                lineHeight = 22.sp,
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp,
                 maxLines = 4,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth(0.75f)
             )
 
             if (movie.cast.isNotBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = "Starring: ${movie.cast}",
                     color = LumeTextSecondary,
-                    fontSize = 13.sp,
+                    fontSize = 10.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -808,7 +808,7 @@ fun TvMovieDetailSheet(
                         Text(
                             text = "Play Movie",
                             color = if (isPlayFocused) Color.Black else Color.White,
-                            fontSize = 16.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -946,9 +946,9 @@ fun TvSeriesDetailSheet(
                     Text(
                         text = series.name,
                         color = Color.White,
-                        fontSize = 32.sp,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        lineHeight = 38.sp,
+                        lineHeight = 22.sp,
                         modifier = Modifier.weight(1f)
                     )
 
@@ -1003,7 +1003,7 @@ fun TvSeriesDetailSheet(
                         Text(
                             text = "Close",
                             color = if (isCloseFocused) Color.Black else Color.White,
-                            fontSize = 15.sp,
+                            fontSize = 11.5.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -1011,33 +1011,33 @@ fun TvSeriesDetailSheet(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     if (series.rating > 0f) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(16.dp))
-                            Text(String.format(Locale.US, "%.1f", series.rating), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Default.Star, contentDescription = null, tint = Color(0xFFFFD700), modifier = Modifier.size(13.dp))
+                            Text(String.format(Locale.US, "%.1f", series.rating), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
                     if (series.releaseDate.isNotBlank()) {
-                        Text(series.releaseDate, color = LumeTextSecondary, fontSize = 15.sp)
+                        Text(series.releaseDate, color = LumeTextSecondary, fontSize = 11.sp)
                     }
 
                     val totalSeasons = detailsResult?.seasons?.size ?: 0
                     if (totalSeasons > 0) {
-                        Text("$totalSeasons Season${if (totalSeasons > 1) "s" else ""}", color = LumeTextSecondary, fontSize = 15.sp)
+                        Text("$totalSeasons Season${if (totalSeasons > 1) "s" else ""}", color = LumeTextSecondary, fontSize = 11.sp)
                     }
                 }
 
                 Text(
                     text = if (series.plot.isNotBlank()) series.plot else detailsResult?.plot?.ifBlank { "Select an episode to begin watching." } ?: "Select an episode to begin watching.",
                     color = Color.White.copy(alpha = 0.80f),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth(0.75f)
@@ -1105,7 +1105,7 @@ fun TvSeriesDetailSheet(
                                 Text(
                                     text = "Season $seasonNum",
                                     color = if (isSelected || isFocused) Color.Black else Color.White,
-                                    fontSize = 13.sp,
+                                    fontSize = 11.sp,
                                     fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
                                 )
                             }
@@ -1115,11 +1115,11 @@ fun TvSeriesDetailSheet(
             }
 
             // Bottom Section: Horizontal rail of 16:9 Episode Cards (Apple TV TVEpisodeCard)
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = "EPISODES",
                     color = LumeTextSecondary,
-                    fontSize = 13.sp,
+                    fontSize = 11.5.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
                 )
@@ -1233,25 +1233,25 @@ fun TvSeriesDetailSheet(
                                     }
                                 }
 
-                                Column(modifier = Modifier.padding(10.dp)) {
+                                Column(modifier = Modifier.padding(8.dp)) {
                                     Text(
                                         text = "${episode.episodeNumber}. ${episode.title.ifBlank { "Episode ${episode.episodeNumber}" }}",
                                         color = Color.White,
-                                        fontSize = 13.sp,
+                                        fontSize = 11.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
 
                                     if (episode.plot.isNotBlank()) {
-                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Spacer(modifier = Modifier.height(2.dp))
                                         Text(
                                             text = episode.plot,
                                             color = LumeTextSecondary,
-                                            fontSize = 11.sp,
+                                            fontSize = 10.sp,
                                             maxLines = 2,
                                             overflow = TextOverflow.Ellipsis,
-                                            lineHeight = 14.sp
+                                            lineHeight = 13.sp
                                         )
                                     }
                                 }
