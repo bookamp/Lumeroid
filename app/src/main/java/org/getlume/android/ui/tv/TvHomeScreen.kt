@@ -150,6 +150,7 @@ fun TvHomeScreen(
     val cachedTrendingMovies by org.getlume.android.core.data.BrowseCache.trendingMovies.collectAsState()
     val cachedTrendingSeries by org.getlume.android.core.data.BrowseCache.trendingSeries.collectAsState()
     val cachedFavoriteMovies by org.getlume.android.core.data.BrowseCache.favoriteMovies.collectAsState()
+    val cachedHeroItems by org.getlume.android.core.data.BrowseCache.heroItems.collectAsState()
 
     val filteredMovies = remember(movies, categoryMap, isFiltering, allowedMovieCats, revision) {
         if (!isFiltering) movies
@@ -168,21 +169,35 @@ fun TvHomeScreen(
         }
     }
     val filteredFeaturedMovies = remember(cachedFeaturedMovies, featuredMovies, categoryMap, isFiltering, allowedMovieCats, revision) {
-        if (cachedFeaturedMovies.isNotEmpty()) cachedFeaturedMovies
-        else if (!isFiltering) featuredMovies
-        else featuredMovies.filter { movie ->
-            val catMatches = allowedMovieCats.isEmpty() || allowedMovieCats.contains(movie.categoryId)
-            val langMatches = settings.matchesContentLanguage(movie.name, categoryMap[movie.categoryId] ?: "")
-            catMatches && langMatches
+        val list = if (cachedFeaturedMovies.isNotEmpty()) cachedFeaturedMovies else featuredMovies
+        if (!isFiltering && settings.homeContentLanguages.isEmpty()) {
+            list.filter { movie ->
+                val upper = movie.name.uppercase()
+                val prefixLang = org.getlume.android.core.settings.ContentLanguageCatalog.findPrefixLanguage(upper)
+                prefixLang == null || prefixLang.code == "en"
+            }
+        } else {
+            list.filter { movie ->
+                val catMatches = allowedMovieCats.isEmpty() || allowedMovieCats.contains(movie.categoryId)
+                val langMatches = settings.matchesContentLanguage(movie.name, categoryMap[movie.categoryId] ?: "")
+                catMatches && langMatches
+            }
         }
     }
     val filteredFeaturedSeries = remember(cachedFeaturedSeries, featuredSeries, categoryMap, isFiltering, allowedSeriesCats, revision) {
-        if (cachedFeaturedSeries.isNotEmpty()) cachedFeaturedSeries
-        else if (!isFiltering) featuredSeries
-        else featuredSeries.filter { series ->
-            val catMatches = allowedSeriesCats.isEmpty() || allowedSeriesCats.contains(series.categoryId)
-            val langMatches = settings.matchesContentLanguage(series.name, categoryMap[series.categoryId] ?: "")
-            catMatches && langMatches
+        val list = if (cachedFeaturedSeries.isNotEmpty()) cachedFeaturedSeries else featuredSeries
+        if (!isFiltering && settings.homeContentLanguages.isEmpty()) {
+            list.filter { s ->
+                val upper = s.name.uppercase()
+                val prefixLang = org.getlume.android.core.settings.ContentLanguageCatalog.findPrefixLanguage(upper)
+                prefixLang == null || prefixLang.code == "en"
+            }
+        } else {
+            list.filter { series ->
+                val catMatches = allowedSeriesCats.isEmpty() || allowedSeriesCats.contains(series.categoryId)
+                val langMatches = settings.matchesContentLanguage(series.name, categoryMap[series.categoryId] ?: "")
+                catMatches && langMatches
+            }
         }
     }
 
@@ -318,9 +333,10 @@ fun TvHomeScreen(
     }
 
     // Dynamic hero slides: Prefer TMDB matched trending titles with transparent logo artwork, matching HomeView+Trending.swift
-    val heroSlides = remember(trendingResult.heroItems, filteredFeaturedMovies, filteredFeaturedSeries, filteredChannels, isFiltering, allowedMovieCats, allowedSeriesCats) {
+    val heroCandidates = if (trendingResult.heroItems.isNotEmpty()) trendingResult.heroItems else cachedHeroItems
+    val heroSlides = remember(heroCandidates, filteredFeaturedMovies, filteredFeaturedSeries, filteredChannels, isFiltering, allowedMovieCats, allowedSeriesCats) {
         val baseHeroItems = if (isFiltering) {
-            trendingResult.heroItems.filter { item ->
+            heroCandidates.filter { item ->
                 val movie = item.movie
                 val series = item.series
                 when {
@@ -330,7 +346,7 @@ fun TvHomeScreen(
                 }
             }
         } else {
-            trendingResult.heroItems
+            heroCandidates
         }
 
         if (baseHeroItems.isNotEmpty()) {
@@ -341,37 +357,45 @@ fun TvHomeScreen(
             for (i in 0 until maxCount) {
                 if (i < filteredFeaturedMovies.size) {
                     val movie = filteredFeaturedMovies[i]
-                    val cleanTitle = org.getlume.android.core.sync.HomeTrendingManager.cleanTitle(movie.name)
-                    items.add(
-                        DynamicHeroItem(
-                            id = "movie-${movie.id}",
-                            title = cleanTitle,
-                            overview = if (movie.plot.isNotBlank()) movie.plot else "Watch this movie in high definition from your IPTV subscription.",
-                            rating = if (movie.rating > 0f) String.format(Locale.US, "%.1f", movie.rating) else "8.5",
-                            posterUrl = movie.posterUrl,
-                            backdropUrl = movie.backdropUrl,
-                            playableMedia = movie.toPlayableMedia(),
-                            movie = movie,
-                            logoUrl = movie.logoUrl
+                    val upper = movie.name.uppercase()
+                    val prefixLang = org.getlume.android.core.settings.ContentLanguageCatalog.findPrefixLanguage(upper)
+                    if (prefixLang == null || prefixLang.code == "en" || settings.matchesContentLanguage(movie.name, categoryMap[movie.categoryId] ?: "")) {
+                        val cleanTitle = org.getlume.android.core.sync.HomeTrendingManager.cleanTitle(movie.name)
+                        items.add(
+                            DynamicHeroItem(
+                                id = "movie-${movie.id}",
+                                title = cleanTitle,
+                                overview = if (movie.plot.isNotBlank()) movie.plot else "Watch this movie in high definition from your IPTV subscription.",
+                                rating = if (movie.rating > 0f) String.format(Locale.US, "%.1f", movie.rating) else "8.5",
+                                posterUrl = movie.posterUrl,
+                                backdropUrl = movie.backdropUrl,
+                                playableMedia = movie.toPlayableMedia(),
+                                movie = movie,
+                                logoUrl = movie.logoUrl
+                            )
                         )
-                    )
+                    }
                 }
                 if (i < filteredFeaturedSeries.size) {
                     val series = filteredFeaturedSeries[i]
-                    val cleanTitle = org.getlume.android.core.sync.HomeTrendingManager.cleanTitle(series.name)
-                    items.add(
-                        DynamicHeroItem(
-                            id = "series-${series.id}",
-                            title = cleanTitle,
-                            overview = if (series.plot.isNotBlank()) series.plot else "Stream all episodes of this series on demand from your IPTV subscription.",
-                            rating = if (series.rating > 0f) String.format(Locale.US, "%.1f", series.rating) else "8.0",
-                            posterUrl = series.posterUrl,
-                            backdropUrl = series.backdropUrl,
-                            playableMedia = null,
-                            series = series,
-                            logoUrl = series.logoUrl
+                    val upper = series.name.uppercase()
+                    val prefixLang = org.getlume.android.core.settings.ContentLanguageCatalog.findPrefixLanguage(upper)
+                    if (prefixLang == null || prefixLang.code == "en" || settings.matchesContentLanguage(series.name, categoryMap[series.categoryId] ?: "")) {
+                        val cleanTitle = org.getlume.android.core.sync.HomeTrendingManager.cleanTitle(series.name)
+                        items.add(
+                            DynamicHeroItem(
+                                id = "series-${series.id}",
+                                title = cleanTitle,
+                                overview = if (series.plot.isNotBlank()) series.plot else "Stream all episodes of this series on demand from your IPTV subscription.",
+                                rating = if (series.rating > 0f) String.format(Locale.US, "%.1f", series.rating) else "8.0",
+                                posterUrl = series.posterUrl,
+                                backdropUrl = series.backdropUrl,
+                                playableMedia = null,
+                                series = series,
+                                logoUrl = series.logoUrl
+                            )
                         )
-                    )
+                    }
                 }
             }
             // Fall back to live channels if no movies/series exist yet
