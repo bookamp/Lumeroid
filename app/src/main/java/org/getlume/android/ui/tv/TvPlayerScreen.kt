@@ -158,8 +158,10 @@ fun TvPlayerScreen(
     // Screen lifecycle: release ExoPlayer only on exit of the player screen
     DisposableEffect(Unit) {
         onDispose {
-            if (!currentMedia.isLive && currentPositionMs > 5000L) {
-                coroutineScope.launch(Dispatchers.IO) {
+            val finalPos = try { playerManager.player.currentPosition } catch (_: Exception) { currentPositionMs }
+            val finalDur = try { playerManager.player.duration } catch (_: Exception) { durationMs }
+            if (!currentMedia.isLive && finalPos > 3000L) {
+                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                     val progressContentId = if (currentMedia.contentType == "episode" && currentMedia.seriesId.isNotBlank()) {
                         currentMedia.seriesId
                     } else {
@@ -171,9 +173,9 @@ fun TvPlayerScreen(
                         title = currentMedia.title,
                         posterUrl = currentMedia.posterUrl,
                         contentType = currentMedia.contentType.ifBlank { "movie" },
-                        positionMs = currentPositionMs,
-                        durationMs = durationMs.coerceAtLeast(1L),
-                        isCompleted = durationMs > 0 && currentPositionMs > (durationMs * 0.90)
+                        positionMs = finalPos,
+                        durationMs = finalDur.coerceAtLeast(1L),
+                        isCompleted = finalDur > 0 && finalPos > (finalDur * 0.90)
                     )
                     db.watchProgressDao().saveProgress(progress)
                     org.getlume.android.core.data.BrowseCache.refreshRecentlyWatched()
@@ -205,14 +207,37 @@ fun TvPlayerScreen(
         }
     }
 
-    // Ticker for playback progress
+    // Ticker for playback progress and periodic auto-save
     LaunchedEffect(currentMedia) {
+        var tickCount = 0
         while (true) {
             delay(1000)
             if (!currentMedia.isLive) {
                 currentPositionMs = playerManager.player.currentPosition
                 if (playerManager.player.duration > 0) {
                     durationMs = playerManager.player.duration
+                }
+                tickCount++
+                if (tickCount % 5 == 0 && currentPositionMs > 3000L) {
+                    withContext(Dispatchers.IO) {
+                        val progressContentId = if (currentMedia.contentType == "episode" && currentMedia.seriesId.isNotBlank()) {
+                            currentMedia.seriesId
+                        } else {
+                            currentMedia.id
+                        }
+                        val progress = WatchProgressEntity(
+                            contentId = progressContentId,
+                            profileId = AppSettings.get().activeProfileId,
+                            title = currentMedia.title,
+                            posterUrl = currentMedia.posterUrl,
+                            contentType = currentMedia.contentType.ifBlank { "movie" },
+                            positionMs = currentPositionMs,
+                            durationMs = durationMs.coerceAtLeast(1L),
+                            isCompleted = durationMs > 0 && currentPositionMs > (durationMs * 0.90)
+                        )
+                        db.watchProgressDao().saveProgress(progress)
+                        org.getlume.android.core.data.BrowseCache.refreshRecentlyWatched()
+                    }
                 }
             }
         }
