@@ -87,18 +87,22 @@ fun MovieEntity.toPlayableMedia(): PlayableMedia {
     )
 }
 
-fun EpisodeEntity.toPlayableMedia(seriesTitle: String = ""): PlayableMedia {
+fun EpisodeEntity.toPlayableMedia(
+    seriesTitle: String = "",
+    seriesPosterUrl: String = "",
+    fullSeriesId: String = ""
+): PlayableMedia {
     val sub = if (seriesTitle.isNotBlank()) "$seriesTitle • S${seasonNumber}E${episodeNumber}" else "S${seasonNumber}E${episodeNumber}"
     return PlayableMedia(
         id = id,
         title = title.ifBlank { "Episode $episodeNumber" },
         subtitle = sub,
         streamUrl = streamUrl,
-        posterUrl = thumbnail,
+        posterUrl = thumbnail.ifBlank { seriesPosterUrl },
         isLive = false,
         durationMs = (durationMinutes * 60 * 1000).toLong(),
         contentType = "episode",
-        seriesId = seriesId
+        seriesId = fullSeriesId.ifBlank { seriesId }
     )
 }
 

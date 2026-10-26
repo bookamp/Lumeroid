@@ -544,7 +544,13 @@ fun TvSeriesScreen(
                     playlist = pl,
                     onPlayEpisode = { episode ->
                         selectedSeries = null
-                        onPlayMedia(episode.toPlayableMedia(seriesTitle = series.name))
+                        onPlayMedia(
+                            episode.toPlayableMedia(
+                                seriesTitle = series.name,
+                                seriesPosterUrl = series.posterUrl,
+                                fullSeriesId = series.id
+                            )
+                        )
                     },
                     onDismiss = {
                         selectedSeries = null

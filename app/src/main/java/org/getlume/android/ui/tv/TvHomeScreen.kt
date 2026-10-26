@@ -1240,7 +1240,13 @@ fun TvHomeScreen(
                 playlist = activePlaylist!!,
                 onPlayEpisode = { ep ->
                     selectedSeries = null
-                    onPlayMedia(ep.toPlayableMedia(series.name))
+                    onPlayMedia(
+                        ep.toPlayableMedia(
+                            seriesTitle = series.name,
+                            seriesPosterUrl = series.posterUrl,
+                            fullSeriesId = series.id
+                        )
+                    )
                 },
                 onDismiss = {
                     selectedSeries = null

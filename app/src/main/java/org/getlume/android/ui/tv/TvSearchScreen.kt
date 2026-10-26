@@ -493,7 +493,13 @@ fun TvSearchScreen(
                         playlist = playlist,
                         onPlayEpisode = { episode ->
                             selectedSeries = null
-                            onPlayMedia(episode.toPlayableMedia(series.name))
+                            onPlayMedia(
+                                episode.toPlayableMedia(
+                                    seriesTitle = series.name,
+                                    seriesPosterUrl = series.posterUrl,
+                                    fullSeriesId = series.id
+                                )
+                            )
                         },
                         onDismiss = dismissDetails
                     )
