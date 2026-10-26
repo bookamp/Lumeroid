@@ -1,7 +1,7 @@
 <resources>
-    <style name="Theme.Lume" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/lume_background</item>
-        <item name="android:statusBarColor">@color/lume_background</item>
-        <item name="android:navigationBarColor">@color/lume_background</item>
+    <style name="Theme.Lumeroid" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/lumeroid_background</item>
+        <item name="android:statusBarColor">@color/lumeroid_background</item>
+        <item name="android:navigationBarColor">@color/lumeroid_background</item>
     </style>
 </resources>

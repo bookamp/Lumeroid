@@ -1,6 +1,6 @@
 # Agent Guidelines & Project Rules
 
-These guidelines are mandatory for all AI agents working within the Lume-Android repository.
+These guidelines are mandatory for all AI agents working within the Lumeroid repository.
 
 ---
 

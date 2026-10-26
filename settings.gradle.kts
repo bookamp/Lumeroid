@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Lume"
+rootProject.name = "Lumeroid"
 include(":app")
