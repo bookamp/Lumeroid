@@ -40,11 +40,15 @@ object HomeTrendingManager {
     private val _trendingResult = MutableStateFlow<HomeTrendingResult>(HomeTrendingResult())
     val trendingResult: StateFlow<HomeTrendingResult> = _trendingResult.asStateFlow()
 
-    fun setCachedTrending(movies: List<MovieEntity>, series: List<SeriesEntity>) {
-        if (_trendingResult.value.trendingMovies.isEmpty() && _trendingResult.value.trendingSeries.isEmpty()) {
-            if (movies.isNotEmpty() || series.isNotEmpty()) {
+    fun setCachedTrending(
+        movies: List<MovieEntity>,
+        series: List<SeriesEntity>,
+        heroes: List<DynamicHeroItem> = emptyList()
+    ) {
+        if (_trendingResult.value.trendingMovies.isEmpty() && _trendingResult.value.trendingSeries.isEmpty() && _trendingResult.value.heroItems.isEmpty()) {
+            if (movies.isNotEmpty() || series.isNotEmpty() || heroes.isNotEmpty()) {
                 _trendingResult.value = HomeTrendingResult(
-                    heroItems = emptyList(),
+                    heroItems = heroes,
                     trendingMovies = movies,
                     trendingSeries = series
                 )
@@ -312,7 +316,7 @@ object HomeTrendingManager {
             _trendingResult.value = result
 
             // Also persist to BrowseCache disk for instant frame 0 restore on next app launch
-            org.getlume.android.core.data.BrowseCache.updateTrending(finalMovies, finalSeries)
+            org.getlume.android.core.data.BrowseCache.updateTrending(finalMovies, finalSeries, finalHeroes)
 
             // 5. Asynchronously enrich visible hero titles with official TMDB transparent PNG logos
             enrichHeroLogos(cacheKey, finalHeroes)
@@ -370,6 +374,7 @@ object HomeTrendingManager {
                 val updatedResult = current.copy(heroItems = enrichedHeroes)
                 sessionCache[cacheKey] = updatedResult
                 _trendingResult.value = updatedResult
+                org.getlume.android.core.data.BrowseCache.updateTrending(updatedResult.trendingMovies, updatedResult.trendingSeries, enrichedHeroes)
             }
         }
     }

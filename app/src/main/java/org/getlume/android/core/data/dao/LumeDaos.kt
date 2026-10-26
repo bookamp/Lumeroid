@@ -251,16 +251,16 @@ interface VodDao {
     @Query("SELECT * FROM series WHERE playlistId = :playlistId AND categoryId = :categoryId ORDER BY name ASC LIMIT :limit")
     suspend fun getSeriesByCategoryLimitedDirect(playlistId: String, categoryId: String, limit: Int = 21): List<SeriesEntity>
 
-    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
+    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND (backdropUrl != '' OR posterUrl != '') AND rating >= 6.0 AND rating <= 10.0 ORDER BY rating DESC, name ASC LIMIT :limit")
     fun getFeaturedMovies(playlistId: String, limit: Int = 12): Flow<List<MovieEntity>>
 
-    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
+    @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND (backdropUrl != '' OR posterUrl != '') AND rating >= 6.0 AND rating <= 10.0 ORDER BY rating DESC, name ASC LIMIT :limit")
     suspend fun getFeaturedMoviesDirect(playlistId: String, limit: Int = 12): List<MovieEntity>
 
-    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
+    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND (backdropUrl != '' OR posterUrl != '') AND rating >= 6.0 AND rating <= 10.0 ORDER BY rating DESC, name ASC LIMIT :limit")
     fun getFeaturedSeries(playlistId: String, limit: Int = 12): Flow<List<SeriesEntity>>
 
-    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND posterUrl != '' ORDER BY rating DESC, name ASC LIMIT :limit")
+    @Query("SELECT * FROM series WHERE playlistId = :playlistId AND (categoryId IS NULL OR categoryId NOT IN (SELECT id FROM categories WHERE isHidden = 1)) AND (backdropUrl != '' OR posterUrl != '') AND rating >= 6.0 AND rating <= 10.0 ORDER BY rating DESC, name ASC LIMIT :limit")
     suspend fun getFeaturedSeriesDirect(playlistId: String, limit: Int = 12): List<SeriesEntity>
 
     @Query("SELECT * FROM series WHERE playlistId = :playlistId AND isFavorite = 1")
