@@ -43,7 +43,10 @@ class ESPNClient {
         "basketball/nba" to "NBA",
         "football/nfl" to "NFL",
         "baseball/mlb" to "MLB",
-        "hockey/nhl" to "NHL"
+        "hockey/nhl" to "NHL",
+        "tennis/atp" to "Tennis",
+        "cricket" to "Cricket",
+        "racing/f1" to "Formula 1"
     )
 
     suspend fun fetchLiveScoreboards(): List<SportsFixture> {
@@ -55,6 +58,25 @@ class ESPNClient {
     }
 
     suspend fun fetchScoreboard(sportLeague: String): List<SportsFixture> {
+        return when (sportLeague) {
+            "cricket" -> {
+                val results = mutableListOf<SportsFixture>()
+                for (leagueId in listOf("cricket/8043", "cricket/8048", "cricket/8604")) {
+                    results.addAll(fetchSingleScoreboard(leagueId))
+                }
+                results
+            }
+            "tennis/atp", "tennis" -> {
+                val results = mutableListOf<SportsFixture>()
+                results.addAll(fetchSingleScoreboard("tennis/atp"))
+                results.addAll(fetchSingleScoreboard("tennis/wta"))
+                results
+            }
+            else -> fetchSingleScoreboard(sportLeague)
+        }
+    }
+
+    private suspend fun fetchSingleScoreboard(sportLeague: String): List<SportsFixture> {
         return try {
             val url = "https://site.api.espn.com/apis/site/v2/sports/$sportLeague/scoreboard"
             val responseText: String = client.get(url).bodyAsText()
@@ -66,25 +88,63 @@ class ESPNClient {
             events.mapNotNull { eventElement ->
                 val event = eventElement.jsonObject
                 val id = event["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                val competitions = event["competitions"]?.jsonArray?.firstOrNull()?.jsonObject ?: return@mapNotNull null
-                val competitors = competitions["competitors"]?.jsonArray ?: return@mapNotNull null
 
-                if (competitors.size < 2) return@mapNotNull null
+                val competitionsList = mutableListOf<JsonObject>()
+                event["competitions"]?.jsonArray?.forEach { if (it is JsonObject) competitionsList.add(it) }
+                if (competitionsList.isEmpty()) {
+                    event["groupings"]?.jsonArray?.forEach { grouping ->
+                        if (grouping is JsonObject) {
+                            grouping["competitions"]?.jsonArray?.forEach { comp ->
+                                if (comp is JsonObject) competitionsList.add(comp)
+                            }
+                        }
+                    }
+                }
 
-                val home = competitors[0].jsonObject
-                val away = competitors[1].jsonObject
+                val competition = competitionsList.firstOrNull() ?: return@mapNotNull null
+                val competitors = competition["competitors"]?.jsonArray ?: JsonArray(emptyList())
 
-                val homeName = home["team"]?.jsonObject?.get("displayName")?.jsonPrimitive?.content ?: "Home"
-                val homeLogo = home["team"]?.jsonObject?.get("logo")?.jsonPrimitive?.content ?: ""
-                val homeScore = home["score"]?.jsonPrimitive?.content ?: "-"
+                val (homeName, homeLogo, homeScore) = if (competitors.size >= 1) {
+                    val c = competitors[0].jsonObject
+                    val name = c["team"]?.jsonObject?.get("displayName")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("displayName")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("fullName")?.jsonPrimitive?.content
+                        ?: "Home"
+                    val logo = c["team"]?.jsonObject?.get("logo")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("flag")?.jsonObject?.get("href")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("headshot")?.jsonObject?.get("href")?.jsonPrimitive?.content
+                        ?: ""
+                    val score = c["score"]?.jsonPrimitive?.content ?: ""
+                    Triple(name, logo, score)
+                } else {
+                    val eventName = event["name"]?.jsonPrimitive?.content ?: "Event"
+                    Triple(eventName, "", "")
+                }
 
-                val awayName = away["team"]?.jsonObject?.get("displayName")?.jsonPrimitive?.content ?: "Away"
-                val awayLogo = away["team"]?.jsonObject?.get("logo")?.jsonPrimitive?.content ?: ""
-                val awayScore = away["score"]?.jsonPrimitive?.content ?: "-"
+                val (awayName, awayLogo, awayScore) = if (competitors.size >= 2) {
+                    val c = competitors[1].jsonObject
+                    val name = c["team"]?.jsonObject?.get("displayName")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("displayName")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("fullName")?.jsonPrimitive?.content
+                        ?: "Away"
+                    val logo = c["team"]?.jsonObject?.get("logo")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("flag")?.jsonObject?.get("href")?.jsonPrimitive?.content
+                        ?: c["athlete"]?.jsonObject?.get("headshot")?.jsonObject?.get("href")?.jsonPrimitive?.content
+                        ?: ""
+                    val score = c["score"]?.jsonPrimitive?.content ?: ""
+                    Triple(name, logo, score)
+                } else {
+                    val compType = competition["type"]?.jsonObject?.get("abbreviation")?.jsonPrimitive?.content
+                        ?: competition["description"]?.jsonPrimitive?.content
+                        ?: "Session"
+                    Triple(compType, "", "")
+                }
 
-                val status = event["status"]?.jsonObject
+                val status = event["status"]?.jsonObject ?: competition["status"]?.jsonObject
                 val state = status?.get("type")?.jsonObject?.get("state")?.jsonPrimitive?.content ?: "pre"
-                val statusDetail = status?.get("type")?.jsonObject?.get("shortDetail")?.jsonPrimitive?.content ?: ""
+                val statusDetail = status?.get("type")?.jsonObject?.get("shortDetail")?.jsonPrimitive?.content
+                    ?: status?.get("type")?.jsonObject?.get("description")?.jsonPrimitive?.content
+                    ?: ""
                 val isLive = state == "in"
 
                 SportsFixture(
