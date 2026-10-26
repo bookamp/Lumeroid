@@ -184,8 +184,8 @@ fun TvMoviesScreen(
         if (activePlaylist == null) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("No Playlists", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Text("Add a playlist in Settings to start browsing movies", color = LumeTextSecondary, fontSize = 14.sp)
+                    Text("No Playlists", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("Add a playlist in Settings to start browsing movies", color = LumeTextSecondary, fontSize = 11.5.sp)
                 }
             }
         } else if (categories.isEmpty()) {
@@ -195,8 +195,8 @@ fun TvMoviesScreen(
         } else if (visibleCategories.isEmpty() && isFiltering) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("No Movies for Selected Languages", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text("Adjust your Content Languages in Library Settings", color = LumeTextSecondary, fontSize = 14.sp)
+                    Text("No Movies for Selected Languages", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text("Adjust your Content Languages in Library Settings", color = LumeTextSecondary, fontSize = 11.5.sp)
                 }
             }
         } else {
@@ -390,7 +390,7 @@ fun TvMoviesScreen(
                         Text(
                             text = "Browse by Genre",
                             color = LumeTextSecondary,
-                            fontSize = 15.sp,
+                            fontSize = 12.5.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp,
                             modifier = Modifier.padding(horizontal = 36.dp)
@@ -439,7 +439,7 @@ fun TvMoviesScreen(
                         Text(
                             text = "All Categories",
                             color = LumeTextSecondary,
-                            fontSize = 15.sp,
+                            fontSize = 12.5.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.5.sp,
                             modifier = Modifier
