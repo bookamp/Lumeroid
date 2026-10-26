@@ -502,13 +502,20 @@ fun TvLiveTvScreen(
                         }
                     }
                 } else {
+                    val currentSectionName = when (val sec = selectedSection) {
+                        is LiveTvSection.Category -> sec.category.name
+                        is LiveTvSection.Favorites -> "Favorites"
+                        is LiveTvSection.RecentlyWatched -> "Recently Watched"
+                        null -> ""
+                    }
+
                     Column(modifier = Modifier.fillMaxSize()) {
                         // 100% Feature-Parity: Live Video Hero Preview Pane (EPGPreviewPane / EPGHeroVideoFigure)
                         TvGuideHeroPreviewPane(
                             focusedChannel = focusedChannel ?: displayChannels.firstOrNull(),
                             focusedProgram = focusedProgram,
                             epgData = epgDataMap[focusedChannel?.id ?: displayChannels.firstOrNull()?.id],
-                            onPlay = { chan -> onPlayMedia(chan.toPlayableMedia()) }
+                            onPlay = { chan -> onPlayMedia(chan.toPlayableMedia(lineup = displayChannels, categoryName = currentSectionName)) }
                         )
 
                         Spacer(modifier = Modifier.height(10.dp))
@@ -527,7 +534,7 @@ fun TvLiveTvScreen(
                                             db.watchProgressDao().clearRecentlyWatchedChannels(activeProfileId)
                                         }
                                     },
-                                    onPlay = { chan -> onPlayMedia(chan.toPlayableMedia()) },
+                                    onPlay = { chan -> onPlayMedia(chan.toPlayableMedia(lineup = displayChannels, categoryName = currentSectionName)) },
                                     onOpenMenu = { chan -> selectedChannelForMenu = chan },
                                     onFocusChannel = { chan ->
                                         focusedChannel = chan
@@ -551,8 +558,8 @@ fun TvLiveTvScreen(
                                 TvEpgGuideView(
                                     channels = displayChannels,
                                     epgDataMap = epgDataMap,
-                                    onPlay = { chan -> onPlayMedia(chan.toPlayableMedia()) },
-                                    onPlayCatchup = { chan, prog -> onPlayMedia(chan.toCatchupPlayableMedia(prog)) },
+                                    onPlay = { chan -> onPlayMedia(chan.toPlayableMedia(lineup = displayChannels, categoryName = currentSectionName)) },
+                                    onPlayCatchup = { chan, prog -> onPlayMedia(chan.toCatchupPlayableMedia(prog, lineup = displayChannels, categoryName = currentSectionName)) },
                                     onOpenMenu = { chan -> selectedChannelForMenu = chan },
                                     onFocusChannel = { chan -> focusedChannel = chan },
                                     onFocusProgram = { prog -> focusedProgram = prog },
@@ -581,12 +588,18 @@ fun TvLiveTvScreen(
     selectedChannelForMenu?.let { channel ->
         val isFav = channel.isFavorite
         val epg = epgDataMap[channel.id]
+        val currentSectionName = when (val sec = selectedSection) {
+            is LiveTvSection.Category -> sec.category.name
+            is LiveTvSection.Favorites -> "Favorites"
+            is LiveTvSection.RecentlyWatched -> "Recently Watched"
+            null -> ""
+        }
         TvLiveChannelActionSheet(
             channel = channel,
             currentEpg = epg?.current,
             onPlay = {
                 selectedChannelForMenu = null
-                onPlayMedia(channel.toPlayableMedia())
+                onPlayMedia(channel.toPlayableMedia(lineup = displayChannels, categoryName = currentSectionName))
             },
             onToggleFavorite = {
                 scope.launch {

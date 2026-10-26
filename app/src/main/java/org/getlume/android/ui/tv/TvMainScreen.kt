@@ -32,7 +32,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun TvMainScreen(
     channelLineup: List<ChannelEntity> = emptyList(),
-    onOpenMultiView: () -> Unit
+    onOpenMultiView: (ChannelEntity?) -> Unit = {}
 ) {
     val settings = remember { AppSettings.get() }
     val revision by settings.revision.collectAsState()
@@ -168,7 +168,7 @@ fun TvMainScreen(
                             try { topBarFocusRequester.requestFocus() } catch (_: Exception) {}
                         },
                         onStartMultiView = { channel ->
-                            onOpenMultiView()
+                            onOpenMultiView(channel)
                         }
                     )
                 }
@@ -184,7 +184,7 @@ fun TvMainScreen(
                 }
                 Screen.MultiView -> {
                     LaunchedEffect(Unit) {
-                        onOpenMultiView()
+                        onOpenMultiView(null)
                         switchScreen(Screen.Home)
                     }
                 }
@@ -259,7 +259,7 @@ fun TvMainScreen(
             activePlaybackMedia?.let { media ->
                 TvPlayerScreen(
                     media = media,
-                    channelLineup = channelLineup,
+                    channelLineup = if (media.channelLineup.isNotEmpty()) media.channelLineup else channelLineup,
                     onBack = {
                         activePlaybackMedia = null
                         coroutineScope.launch {

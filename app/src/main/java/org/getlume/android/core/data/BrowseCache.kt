@@ -16,6 +16,8 @@ import org.getlume.android.core.data.entities.SeriesEntity
 import org.getlume.android.core.data.entities.WatchProgressEntity
 import org.getlume.android.core.settings.AppSettings
 import org.getlume.android.core.settings.ContentFilterCache
+import org.getlume.android.core.player.toPlayableMedia
+import org.getlume.android.ui.tv.DynamicHeroItem
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -73,6 +75,9 @@ object BrowseCache {
 
     private val _featuredSeries = MutableStateFlow<List<SeriesEntity>>(emptyList())
     val featuredSeries: StateFlow<List<SeriesEntity>> = _featuredSeries.asStateFlow()
+
+    private val _heroItems = MutableStateFlow<List<DynamicHeroItem>>(emptyList())
+    val heroItems: StateFlow<List<DynamicHeroItem>> = _heroItems.asStateFlow()
 
     private val _homeRecentlyAdded = MutableStateFlow<List<Any>>(emptyList())
     val homeRecentlyAdded: StateFlow<List<Any>> = _homeRecentlyAdded.asStateFlow()
@@ -153,10 +158,15 @@ object BrowseCache {
         }
     }
 
-    fun updateTrending(movies: List<MovieEntity>, series: List<SeriesEntity>) {
-        if (movies.isEmpty() && series.isEmpty()) return
-        _trendingMovies.value = movies
-        _trendingSeries.value = series
+    fun updateTrending(
+        movies: List<MovieEntity>,
+        series: List<SeriesEntity>,
+        heroes: List<DynamicHeroItem> = emptyList()
+    ) {
+        if (movies.isEmpty() && series.isEmpty() && heroes.isEmpty()) return
+        if (movies.isNotEmpty()) _trendingMovies.value = movies
+        if (series.isNotEmpty()) _trendingSeries.value = series
+        if (heroes.isNotEmpty()) _heroItems.value = heroes
         if (activePlaylistId.isNotBlank()) {
             scope.launch {
                 saveDiskCache(LumeApp.instance, activePlaylistId)
@@ -297,21 +307,31 @@ object BrowseCache {
                 _previewCategorySeries.value = seriesCategoryMap
 
                 // 6. Featured & Home Recently Added
-                val rawFeatMovies = db.vodDao().getFeaturedMoviesDirect(plId, 12)
-                _featuredMovies.value = if (!isFiltering && settings.homeContentLanguages.isEmpty()) rawFeatMovies
-                else rawFeatMovies.filter { movie ->
+                val rawFeatMovies = db.vodDao().getFeaturedMoviesDirect(plId, 60)
+                _featuredMovies.value = if (!isFiltering && settings.homeContentLanguages.isEmpty()) {
+                    rawFeatMovies.filter { movie ->
+                        val upper = movie.name.uppercase()
+                        val prefixLang = org.getlume.android.core.settings.ContentLanguageCatalog.findPrefixLanguage(upper)
+                        prefixLang == null || prefixLang.code == "en"
+                    }.take(12)
+                } else rawFeatMovies.filter { movie ->
                     val catName = catMap[movie.categoryId] ?: ""
                     (!isFiltering || allowedMovieCatIds.contains(movie.categoryId)) &&
                     (settings.homeContentLanguages.isEmpty() || settings.matchesContentLanguage(movie.name, catName))
-                }
+                }.take(12)
 
-                val rawFeatSeries = db.vodDao().getFeaturedSeriesDirect(plId, 12)
-                _featuredSeries.value = if (!isFiltering && settings.homeContentLanguages.isEmpty()) rawFeatSeries
-                else rawFeatSeries.filter { s ->
+                val rawFeatSeries = db.vodDao().getFeaturedSeriesDirect(plId, 60)
+                _featuredSeries.value = if (!isFiltering && settings.homeContentLanguages.isEmpty()) {
+                    rawFeatSeries.filter { s ->
+                        val upper = s.name.uppercase()
+                        val prefixLang = org.getlume.android.core.settings.ContentLanguageCatalog.findPrefixLanguage(upper)
+                        prefixLang == null || prefixLang.code == "en"
+                    }.take(12)
+                } else rawFeatSeries.filter { s ->
                     val catName = catMap[s.categoryId] ?: ""
                     (!isFiltering || allowedSeriesCatIds.contains(s.categoryId)) &&
                     (settings.homeContentLanguages.isEmpty() || settings.matchesContentLanguage(s.name, catName))
-                }
+                }.take(12)
 
                 // Interleaved Home Recently Added
                 val combined = mutableListOf<Any>()
@@ -493,11 +513,17 @@ object BrowseCache {
                 try { jsonToSeries(featSeriesArr.getJSONObject(it)) } catch (_: Exception) { null }
             }
 
+            val heroArr = json.optJSONArray("heroItems") ?: JSONArray()
+            val heroList = (0 until heroArr.length()).mapNotNull {
+                try { jsonToHeroItem(heroArr.getJSONObject(it)) } catch (_: Exception) { null }
+            }
+
             // Apply directly into StateFlows
             _continueWatching.value = cwList
             _trendingMovies.value = tmList
             _trendingSeries.value = tsList
-            org.getlume.android.core.sync.HomeTrendingManager.setCachedTrending(tmList, tsList)
+            _heroItems.value = heroList
+            org.getlume.android.core.sync.HomeTrendingManager.setCachedTrending(tmList, tsList, heroList)
 
             _recentlyWatchedMovies.value = rwMovies
             _favoriteMovies.value = favMovies
@@ -611,6 +637,27 @@ object BrowseCache {
                 val featSeriesArr = JSONArray()
                 _featuredSeries.value.take(12).forEach { featSeriesArr.put(seriesToJson(it)) }
                 put("featuredSeries", featSeriesArr)
+
+                val heroSource = if (_heroItems.value.isNotEmpty()) {
+                    _heroItems.value
+                } else {
+                    org.getlume.android.core.sync.HomeTrendingManager.trendingResult.value.heroItems
+                }
+                val heroArr = JSONArray()
+                if (heroSource.isNotEmpty()) {
+                    heroSource.take(8).forEach { heroArr.put(heroItemToJson(it)) }
+                } else if (file.exists()) {
+                    try {
+                        val existingJson = JSONObject(file.readText())
+                        val existingHeroArr = existingJson.optJSONArray("heroItems")
+                        if (existingHeroArr != null) {
+                            for (i in 0 until existingHeroArr.length()) {
+                                heroArr.put(existingHeroArr.get(i))
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+                put("heroItems", heroArr)
             }
 
             file.writeText(json.toString())
@@ -727,4 +774,35 @@ object BrowseCache {
         lastWatchedAt = json.optLong("lastWatchedAt", System.currentTimeMillis()),
         isCompleted = json.optBoolean("isCompleted", false)
     )
+
+    private fun heroItemToJson(h: DynamicHeroItem): JSONObject = JSONObject().apply {
+        put("id", h.id)
+        put("title", h.title)
+        put("overview", h.overview)
+        put("rating", h.rating)
+        put("posterUrl", h.posterUrl)
+        put("backdropUrl", h.backdropUrl)
+        put("logoUrl", h.logoUrl)
+        put("isTmdbMatched", h.isTmdbMatched)
+        h.movie?.let { put("movie", movieToJson(it)) }
+        h.series?.let { put("series", seriesToJson(it)) }
+    }
+
+    private fun jsonToHeroItem(json: JSONObject): DynamicHeroItem {
+        val movie = if (json.has("movie") && !json.isNull("movie")) jsonToMovie(json.getJSONObject("movie")) else null
+        val series = if (json.has("series") && !json.isNull("series")) jsonToSeries(json.getJSONObject("series")) else null
+        return DynamicHeroItem(
+            id = json.optString("id"),
+            title = json.optString("title"),
+            overview = json.optString("overview"),
+            rating = json.optString("rating", "8.5"),
+            posterUrl = json.optString("posterUrl"),
+            backdropUrl = json.optString("backdropUrl"),
+            playableMedia = movie?.toPlayableMedia(),
+            movie = movie,
+            series = series,
+            logoUrl = json.optString("logoUrl"),
+            isTmdbMatched = json.optBoolean("isTmdbMatched", false)
+        )
+    }
 }
