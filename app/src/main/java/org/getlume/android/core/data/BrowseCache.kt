@@ -208,7 +208,7 @@ object BrowseCache {
                     if (progress.contentType == "movie") {
                         val movie = db.vodDao().getMovieById(progress.contentId)
                         if (movie != null) {
-                            if (movie.playlistId == plId || plId.isEmpty()) {
+                            if ((movie.playlistId == plId || plId.isEmpty()) && movieWatchList.none { it.second.id == movie.id }) {
                                 movieWatchList.add(progress to movie)
                             }
                         } else {
@@ -220,11 +220,11 @@ object BrowseCache {
                                     series = db.vodDao().getSeriesById(ep.seriesId)
                                 }
                             }
-                            if (series != null && (series.playlistId == plId || plId.isEmpty())) {
+                            if (series != null && (series.playlistId == plId || plId.isEmpty()) && seriesWatchList.none { it.second.id == series.id }) {
                                 seriesWatchList.add(progress to series)
                             }
                         }
-                    } else if (progress.contentType == "episode") {
+                    } else if (progress.contentType == "episode" || progress.contentType == "series") {
                         var series = db.vodDao().getSeriesById(progress.contentId)
                         if (series == null) {
                             val ep = db.vodDao().getEpisodeById(progress.contentId)
@@ -232,7 +232,7 @@ object BrowseCache {
                                 series = db.vodDao().getSeriesById(ep.seriesId)
                             }
                         }
-                        if (series != null && (series.playlistId == plId || plId.isEmpty())) {
+                        if (series != null && (series.playlistId == plId || plId.isEmpty()) && seriesWatchList.none { it.second.id == series.id }) {
                             seriesWatchList.add(progress to series)
                         }
                     }
@@ -370,7 +370,7 @@ object BrowseCache {
                 if (progress.contentType == "movie") {
                     val movie = db.vodDao().getMovieById(progress.contentId)
                     if (movie != null) {
-                        if (movie.playlistId == plId || plId.isEmpty()) {
+                        if ((movie.playlistId == plId || plId.isEmpty()) && movieWatchList.none { it.second.id == movie.id }) {
                             movieWatchList.add(progress to movie)
                         }
                     } else {
@@ -382,11 +382,11 @@ object BrowseCache {
                                 series = db.vodDao().getSeriesById(ep.seriesId)
                             }
                         }
-                        if (series != null && (series.playlistId == plId || plId.isEmpty())) {
+                        if (series != null && (series.playlistId == plId || plId.isEmpty()) && seriesWatchList.none { it.second.id == series.id }) {
                             seriesWatchList.add(progress to series)
                         }
                     }
-                } else if (progress.contentType == "episode") {
+                } else if (progress.contentType == "episode" || progress.contentType == "series") {
                     var series = db.vodDao().getSeriesById(progress.contentId)
                     if (series == null) {
                         val ep = db.vodDao().getEpisodeById(progress.contentId)
@@ -394,7 +394,7 @@ object BrowseCache {
                             series = db.vodDao().getSeriesById(ep.seriesId)
                         }
                     }
-                    if (series != null && (series.playlistId == plId || plId.isEmpty())) {
+                    if (series != null && (series.playlistId == plId || plId.isEmpty()) && seriesWatchList.none { it.second.id == series.id }) {
                         seriesWatchList.add(progress to series)
                     }
                 }

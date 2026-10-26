@@ -185,7 +185,7 @@ interface VodDao {
     @Query("SELECT * FROM movies WHERE playlistId = :playlistId AND isFavorite = 1")
     fun getFavoriteMovies(playlistId: String): Flow<List<MovieEntity>>
 
-    @Query("SELECT * FROM movies WHERE id = :movieId LIMIT 1")
+    @Query("SELECT * FROM movies WHERE id = :movieId OR streamId = :movieId LIMIT 1")
     suspend fun getMovieById(movieId: String): MovieEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -194,7 +194,7 @@ interface VodDao {
     @Query("SELECT * FROM series WHERE playlistId = :playlistId AND categoryId = :categoryId ORDER BY name ASC")
     fun getSeriesByCategory(playlistId: String, categoryId: String): Flow<List<SeriesEntity>>
 
-    @Query("SELECT * FROM series WHERE id = :seriesId LIMIT 1")
+    @Query("SELECT * FROM series WHERE id = :seriesId OR seriesId = :seriesId LIMIT 1")
     suspend fun getSeriesById(seriesId: String): SeriesEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
