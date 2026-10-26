@@ -26,22 +26,39 @@ import kotlinx.coroutines.delay
 import org.getlume.android.core.data.entities.ChannelEntity
 import org.getlume.android.core.designsystem.*
 import org.getlume.android.core.player.LumePlayerManager
+import org.getlume.android.core.player.PlayableMedia
+import org.getlume.android.core.player.toPlayableMedia
 
 @Composable
 fun MobilePlayerScreen(
     initialChannel: ChannelEntity,
-    channelLineup: List<ChannelEntity>,
+    channelLineup: List<ChannelEntity> = emptyList(),
+    onBack: () -> Unit
+) {
+    MobilePlayerScreen(
+        media = initialChannel.toPlayableMedia(lineup = channelLineup),
+        channelLineup = channelLineup,
+        onBack = onBack
+    )
+}
+
+@Composable
+fun MobilePlayerScreen(
+    media: PlayableMedia,
+    channelLineup: List<ChannelEntity> = emptyList(),
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val playerManager = remember { LumePlayerManager(context) }
-    var currentChannel by remember { mutableStateOf(initialChannel) }
+    var currentMedia by remember { mutableStateOf(media) }
 
     var showHud by remember { mutableStateOf(true) }
     var isPlaying by remember { mutableStateOf(true) }
+    var currentPositionMs by remember { mutableStateOf(0L) }
+    var durationMs by remember { mutableStateOf(media.durationMs.coerceAtLeast(1L)) }
 
-    DisposableEffect(currentChannel) {
-        playerManager.playChannel(currentChannel)
+    DisposableEffect(currentMedia) {
+        playerManager.playMedia(currentMedia)
         onDispose {
             playerManager.release()
         }
@@ -52,6 +69,18 @@ fun MobilePlayerScreen(
         if (showHud) {
             delay(4000)
             showHud = false
+        }
+    }
+
+    // Position updater for non-live content
+    LaunchedEffect(currentMedia) {
+        if (!currentMedia.isLive) {
+            while (true) {
+                currentPositionMs = playerManager.player.currentPosition
+                val d = playerManager.player.duration
+                if (d > 0) durationMs = d
+                delay(1000)
+            }
         }
     }
 
@@ -66,7 +95,7 @@ fun MobilePlayerScreen(
                 showHud = !showHud
             }
     ) {
-        // ExoPlayer Surface
+        // Video Surface
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
@@ -115,27 +144,31 @@ fun MobilePlayerScreen(
                             .padding(horizontal = 12.dp)
                     ) {
                         Text(
-                            text = currentChannel.name,
+                            text = currentMedia.title,
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 17.sp,
+                            fontSize = 16.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = "Channel ${currentChannel.channelNumber}",
-                            color = LumeTextSecondary,
-                            fontSize = 12.sp
-                        )
+                        if (currentMedia.subtitle.isNotBlank()) {
+                            Text(
+                                text = currentMedia.subtitle,
+                                color = LumeTextSecondary,
+                                fontSize = 11.5.sp
+                            )
+                        }
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(LumeLiveRed)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text("LIVE", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    if (currentMedia.isLive) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(LumeLiveRed)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("LIVE", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
 
@@ -144,73 +177,98 @@ fun MobilePlayerScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    IconButton(
-                        onClick = {
-                            if (isPlaying) {
-                                playerManager.player.pause()
-                                isPlaying = false
-                            } else {
-                                playerManager.player.play()
-                                isPlaying = true
-                            }
-                        },
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(RoundedCornerShape(32.dp))
-                            .background(Color.Black.copy(alpha = 0.5f))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(32.dp)
                     ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp)
-                        )
+                        if (!currentMedia.isLive) {
+                            IconButton(
+                                onClick = { playerManager.player.seekTo((playerManager.player.currentPosition - 10000).coerceAtLeast(0)) },
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(Icons.Default.Replay10, contentDescription = "Rewind 10s", tint = Color.White, modifier = Modifier.size(32.dp))
+                            }
+                        }
+
+                        IconButton(
+                            onClick = {
+                                if (isPlaying) {
+                                    playerManager.player.pause()
+                                    isPlaying = false
+                                } else {
+                                    playerManager.player.play()
+                                    isPlaying = true
+                                }
+                            },
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(RoundedCornerShape(32.dp))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = Color.White,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+
+                        if (!currentMedia.isLive) {
+                            IconButton(
+                                onClick = { playerManager.player.seekTo((playerManager.player.currentPosition + 10000).coerceAtMost(durationMs)) },
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(Icons.Default.Forward10, contentDescription = "Forward 10s", tint = Color.White, modifier = Modifier.size(32.dp))
+                            }
+                        }
                     }
                 }
 
-                // Bottom Quick Prev/Next Channel Controls
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .align(Alignment.BottomCenter)
-                        .padding(24.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = {
-                            val currentIndex = channelLineup.indexOfFirst { it.id == currentChannel.id }
-                            if (currentIndex > 0) {
-                                currentChannel = channelLineup[currentIndex - 1]
-                            } else if (channelLineup.isNotEmpty()) {
-                                currentChannel = channelLineup.last()
-                            }
-                        }
+                // Bottom Progress / Controls (for VOD)
+                if (!currentMedia.isLive && durationMs > 0) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Icon(Icons.Default.SkipPrevious, contentDescription = "Previous Channel", tint = Color.White, modifier = Modifier.size(32.dp))
-                    }
+                        Slider(
+                            value = (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f),
+                            onValueChange = { fraction ->
+                                val target = (fraction * durationMs).toLong()
+                                playerManager.player.seekTo(target)
+                            },
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = LumeAccentBlue,
+                                inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
 
-                    Text(
-                        "Swipe / Buttons to switch channel",
-                        color = LumeTextSecondary,
-                        fontSize = 12.sp
-                    )
-
-                    IconButton(
-                        onClick = {
-                            val currentIndex = channelLineup.indexOfFirst { it.id == currentChannel.id }
-                            if (currentIndex in 0 until channelLineup.lastIndex) {
-                                currentChannel = channelLineup[currentIndex + 1]
-                            } else if (channelLineup.isNotEmpty()) {
-                                currentChannel = channelLineup.first()
-                            }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(formatTime(currentPositionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                            Text(formatTime(durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                         }
-                    ) {
-                        Icon(Icons.Default.SkipNext, contentDescription = "Next Channel", tint = Color.White, modifier = Modifier.size(32.dp))
                     }
                 }
             }
         }
+    }
+}
+
+private fun formatTime(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    val hours = minutes / 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes % 60, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
     }
 }
