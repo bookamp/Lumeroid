@@ -48,8 +48,9 @@ class MainActivity : ComponentActivity() {
                         composable("tv_main") {
                             TvMainScreen(
                                 channelLineup = allChannels,
-                                onOpenMultiView = {
-                                    navController.navigate("tv_multiview")
+                                onOpenMultiView = { channel ->
+                                    val route = if (channel != null) "tv_multiview/${channel.id}" else "tv_multiview"
+                                    navController.navigate(route)
                                 }
                             )
                         }
@@ -92,7 +93,19 @@ class MainActivity : ComponentActivity() {
 
                         composable("tv_multiview") {
                             TvMultiViewScreen(
-                                initialChannel = allChannels.firstOrNull(),
+                                initialChannel = null,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(
+                            route = "tv_multiview/{channelId}",
+                            arguments = listOf(navArgument("channelId") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val channelId = backStackEntry.arguments?.getString("channelId") ?: ""
+                            val initialChannel = allChannels.find { it.id == channelId }
+                            TvMultiViewScreen(
+                                initialChannel = initialChannel,
                                 onBack = { navController.popBackStack() }
                             )
                         }
