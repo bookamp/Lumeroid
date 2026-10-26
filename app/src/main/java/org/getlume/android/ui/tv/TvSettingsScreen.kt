@@ -125,11 +125,11 @@ sealed class SettingsDrillIn {
 
 // MARK: - Metrics from Apple TV TVSettingsMetrics (0.5x ratio: 1 pt tvOS = 0.5 dp Android)
 object TVSettingsMetrics {
-    val rowHPadding = 10.dp
-    val rowVPadding = 7.dp
+    val rowHPadding = 8.dp
+    val rowVPadding = 4.dp
     val rowCornerRadius = 6.dp
-    val railCornerRadius = 10.dp
-    val detailMaxWidth = 430.dp
+    val railCornerRadius = 8.dp
+    val detailMaxWidth = 390.dp
 }
 
 @Composable
@@ -223,9 +223,10 @@ fun TvSettingsScreen(
                 .padding(top = 72.dp, start = 24.dp, end = 24.dp, bottom = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // LEFT COLUMN: TV SIDEBAR RAIL (170dp, matching Apple TV TVSidebarRail.swift)
+            // LEFT COLUMN: TV SIDEBAR RAIL (132dp, compact sidebar scale)
             Box(
                 modifier = Modifier
+                    .width(132.dp)
                     .focusProperties { canFocus = drillInStack.isEmpty() }
                     .onFocusChanged { if (it.hasFocus) isInContentPane = false }
             ) {
@@ -431,9 +432,9 @@ private fun TvSidebarRail(
 ) {
     LazyColumn(
         modifier = Modifier
-            .width(170.dp)
+            .width(132.dp)
             .fillMaxHeight(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         itemsIndexed(SettingsCategory.values()) { index, category ->
             val isSelected = selectedCategory == category
@@ -484,7 +485,7 @@ private fun TvCategoryRailItem(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(32.dp)
+            .height(24.dp)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .clip(RoundedCornerShape(TVSettingsMetrics.railCornerRadius))
             .then(bgModifier)
@@ -501,13 +502,13 @@ private fun TvCategoryRailItem(
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.CenterStart
     ) {
         Text(
             text = title,
             color = textColor,
-            fontSize = 12.5.sp,
+            fontSize = 10.sp,
             fontWeight = if (isSelected || isFocused) FontWeight.SemiBold else FontWeight.Medium
         )
     }
@@ -2344,32 +2345,32 @@ private fun TvContentManagementRow(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
                 .background(if (isRowFocused) Color.White.copy(alpha = 0.95f) else Color.Transparent)
                 .clickable(
                     interactionSource = rowInteractionSource,
                     indication = null,
                     onClick = onToggle
                 )
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = TVSettingsMetrics.rowHPadding, vertical = TVSettingsMetrics.rowVPadding),
             contentAlignment = Alignment.CenterStart
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(
                     imageVector = if (isEnabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                     contentDescription = null,
                     tint = if (isRowFocused) (if (isEnabled) Color(0xFF1565C0) else Color.Black.copy(alpha = 0.45f))
                            else (if (isEnabled) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.35f)),
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(15.dp)
                 )
 
                 Text(
                     text = title,
                     color = if (isRowFocused) Color.Black else if (isEnabled) Color.White else Color.White.copy(alpha = 0.45f),
-                    fontSize = 17.sp,
+                    fontSize = 10.5.sp,
                     fontWeight = FontWeight.Medium
                 )
 
@@ -2377,7 +2378,7 @@ private fun TvContentManagementRow(
                     Text(
                         text = "(Hidden)",
                         color = if (isRowFocused) Color.Black.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.55f),
-                        fontSize = 13.sp
+                        fontSize = 9.sp
                     )
                 }
             }
@@ -2644,32 +2645,32 @@ private fun TvFavoriteItemRow(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Favorite,
                     contentDescription = null,
                     tint = Color(0xFFFF5252),
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(15.dp)
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         text = title,
                         color = if (isFocused) Color.Black else Color.White,
-                        fontSize = 17.sp,
+                        fontSize = 10.5.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
                         text = type,
                         color = if (isFocused) Color.Black.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.5f),
-                        fontSize = 13.sp
+                        fontSize = 9.sp
                     )
                 }
             }
             Text(
                 text = "Remove",
                 color = if (isFocused) Color.Black.copy(alpha = 0.65f) else Color.White.copy(alpha = 0.45f),
-                fontSize = 14.sp
+                fontSize = 10.sp
             )
         }
     }
@@ -2730,10 +2731,10 @@ private fun TvHomeLayoutSettingsPane(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(36.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Section: Sections
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             TvSettingsSectionLabel("Sections")
 
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -5012,7 +5013,7 @@ fun TvSettingsReorderRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
             .background(if (isAnyFocused) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.04f))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -5020,19 +5021,19 @@ fun TvSettingsReorderRow(
         Box(
             modifier = Modifier
                 .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
                 .background(if (isRowFocused) Color.White.copy(alpha = 0.95f) else Color.Transparent)
                 .clickable(
                     interactionSource = rowInteractionSource,
                     indication = null,
                     onClick = { onToggle?.invoke() }
                 )
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = TVSettingsMetrics.rowHPadding, vertical = TVSettingsMetrics.rowVPadding),
             contentAlignment = Alignment.CenterStart
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (onToggle != null) {
                     Icon(
@@ -5043,26 +5044,26 @@ fun TvSettingsReorderRow(
                         } else {
                             if (isRowFocused) Color.Black.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.35f)
                         },
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                 }
                 Text(
                     text = title,
                     color = if (isRowFocused) Color.Black else if (isEnabled) Color.White else Color.White.copy(alpha = 0.45f),
-                    fontSize = 17.sp,
+                    fontSize = 10.5.sp,
                     fontWeight = FontWeight.Medium
                 )
                 if (showsPremiumBadge) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(RoundedCornerShape(4.dp))
                             .background(if (isRowFocused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.15f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
                         Text(
                             text = "PRO",
                             color = if (isRowFocused) Color.Black else Color.White,
-                            fontSize = 10.sp,
+                            fontSize = 8.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -5073,8 +5074,8 @@ fun TvSettingsReorderRow(
         // Action buttons reachable via DPAD_RIGHT
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(start = 8.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.padding(start = 4.dp)
         ) {
             TvMiniIconButton(
                 icon = Icons.Default.KeyboardArrowUp,
@@ -5126,7 +5127,7 @@ private fun TvMiniIconButton(
 
     Box(
         modifier = Modifier
-            .size(34.dp)
+            .size(22.dp)
             .clip(CircleShape)
             .background(bg)
             .clickable(
@@ -5141,7 +5142,7 @@ private fun TvMiniIconButton(
             imageVector = icon,
             contentDescription = null,
             tint = effectiveTint,
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(13.dp)
         )
     }
 }
@@ -5217,27 +5218,27 @@ fun TvSettingsRow(
                         imageVector = leadingIcon,
                         contentDescription = null,
                         tint = foregroundColor,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                 }
 
                 Text(
                     text = title,
                     color = foregroundColor,
-                    fontSize = 17.sp,
+                    fontSize = 10.5.sp,
                     fontWeight = FontWeight.Medium
                 )
                 if (showsPremiumBadge) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(RoundedCornerShape(4.dp))
                             .background(if (isFocused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.15f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
                         Text(
                             text = "PRO",
                             color = foregroundColor,
-                            fontSize = 10.sp,
+                            fontSize = 8.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -5246,13 +5247,13 @@ fun TvSettingsRow(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 if (value != null) {
                     Text(
                         text = value,
                         color = secondaryColor,
-                        fontSize = 16.sp
+                        fontSize = 10.sp
                     )
                 }
                 if (trailingCheckmark) {
@@ -5260,7 +5261,7 @@ fun TvSettingsRow(
                         imageVector = Icons.Default.Check,
                         contentDescription = null,
                         tint = foregroundColor,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(14.dp)
                     )
                 }
                 if (trailingChevron) {
@@ -5268,7 +5269,7 @@ fun TvSettingsRow(
                         imageVector = Icons.Default.ChevronRight,
                         contentDescription = null,
                         tint = secondaryColor,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(14.dp)
                     )
                 }
             }
@@ -5337,13 +5338,13 @@ fun TvSettingsValueRow(
             Text(
                 text = title,
                 color = Color.White,
-                fontSize = 17.sp,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.Medium
             )
             Text(
                 text = value,
                 color = valueColor ?: Color.White.copy(alpha = 0.55f),
-                fontSize = 16.sp
+                fontSize = 10.sp
             )
         }
     }
@@ -5389,25 +5390,25 @@ fun TvSettingsActionButton(
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             if (icon != null) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = foregroundColor,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(14.dp)
                 )
             }
             Text(
                 text = title,
                 color = foregroundColor,
-                fontSize = 16.sp,
+                fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 softWrap = false
@@ -5427,7 +5428,7 @@ fun TvSettingsIconButton(
 
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(42.dp)
             .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
             .background(if (isFocused) Color.White.copy(alpha = 0.95f) else Color.White.copy(alpha = 0.08f))
             .clickable(
@@ -5441,7 +5442,7 @@ fun TvSettingsIconButton(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = if (isFocused) Color.Black else Color.White,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(18.dp)
         )
     }
 }
@@ -5454,10 +5455,10 @@ fun TvSettingsSectionLabel(title: String) {
     Text(
         text = title.uppercase(),
         color = Color.White.copy(alpha = 0.5f),
-        fontSize = 13.sp,
+        fontSize = 9.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = 1.4.sp,
-        modifier = Modifier.padding(horizontal = TVSettingsMetrics.rowHPadding, vertical = 4.dp)
+        letterSpacing = 1.sp,
+        modifier = Modifier.padding(horizontal = TVSettingsMetrics.rowHPadding, vertical = 2.dp)
     )
 }
 
@@ -5466,11 +5467,11 @@ fun TvSettingsFooter(text: String) {
     Text(
         text = text,
         color = Color.White.copy(alpha = 0.55f),
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
+        fontSize = 9.5.sp,
+        lineHeight = 13.5.sp,
         modifier = Modifier
             .padding(horizontal = TVSettingsMetrics.rowHPadding)
-            .padding(top = 6.dp)
+            .padding(top = 3.dp)
     )
 }
 
@@ -5486,8 +5487,8 @@ fun TvDrillInHeader(
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = Modifier.padding(bottom = 8.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.padding(bottom = 6.dp)
     ) {
         Box(
             modifier = Modifier
@@ -5499,23 +5500,23 @@ fun TvDrillInHeader(
                     indication = null,
                     onClick = onBack
                 )
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 9.dp, vertical = 5.dp),
             contentAlignment = Alignment.Center
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Icon(
                     Icons.Default.ArrowBack,
                     contentDescription = null,
                     tint = if (isFocused) Color.Black else Color.White,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(13.dp)
                 )
                 Text(
                     text = backLabel,
                     color = if (isFocused) Color.Black else Color.White,
-                    fontSize = 15.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -5524,7 +5525,7 @@ fun TvDrillInHeader(
         Text(
             text = title,
             color = Color.White,
-            fontSize = 24.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Bold
         )
     }
@@ -5542,39 +5543,39 @@ fun TvSettingsTextInput(
     var isFocused by remember { mutableStateOf(false) }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
         modifier = Modifier.padding(horizontal = TVSettingsMetrics.rowHPadding)
     ) {
         Text(
             text = label.uppercase(),
             color = Color.White.copy(alpha = 0.5f),
-            fontSize = 12.sp,
+            fontSize = 9.sp,
             fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.4.sp
+            letterSpacing = 1.sp
         )
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(48.dp)
+                .height(30.dp)
                 .clip(RoundedCornerShape(TVSettingsMetrics.rowCornerRadius))
                 .background(if (isFocused) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.08f))
                 .border(
-                    width = if (isFocused) 2.dp else 1.dp,
+                    width = if (isFocused) 1.5.dp else 1.dp,
                     color = if (isFocused) Color.White else Color.White.copy(alpha = 0.12f),
                     shape = RoundedCornerShape(TVSettingsMetrics.rowCornerRadius)
                 )
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 9.dp),
             contentAlignment = Alignment.CenterStart
         ) {
             if (value.isEmpty()) {
-                Text(placeholder, color = Color.White.copy(alpha = 0.35f), fontSize = 16.sp)
+                Text(placeholder, color = Color.White.copy(alpha = 0.35f), fontSize = 10.5.sp)
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
+                textStyle = TextStyle(color = Color.White, fontSize = 10.5.sp),
                 cursorBrush = SolidColor(Color.White),
                 visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
                 modifier = Modifier
