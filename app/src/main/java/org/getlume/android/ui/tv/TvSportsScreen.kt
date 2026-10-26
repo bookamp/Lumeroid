@@ -143,8 +143,8 @@ fun TvSportsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column {
-                    Text("Sports Hub", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 28.sp)
-                    Text("Live scores & auto-matched IPTV streams", color = LumeTextSecondary, fontSize = 14.sp)
+                    Text("Sports Hub", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("Live scores & auto-matched IPTV streams", color = LumeTextSecondary, fontSize = 11.5.sp)
                 }
 
                 // League Selector Pills
@@ -283,7 +283,7 @@ private fun TvFixtureCard(
                     Text(
                         text = fixture.homeTeamName,
                         color = Color.White,
-                        fontSize = 18.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.End,
                         maxLines = 1,
@@ -308,7 +308,7 @@ private fun TvFixtureCard(
                     Text(
                         text = "${fixture.homeTeamScore} - ${fixture.awayTeamScore}",
                         color = Color.White,
-                        fontSize = 24.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.Black
                     )
                     Text(
@@ -336,7 +336,7 @@ private fun TvFixtureCard(
                     Text(
                         text = fixture.awayTeamName,
                         color = Color.White,
-                        fontSize = 18.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Start,
                         maxLines = 1,
