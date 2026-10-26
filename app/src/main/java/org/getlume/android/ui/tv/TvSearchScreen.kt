@@ -355,13 +355,13 @@ fun TvSearchScreen(
                                 Text(
                                     text = "Search",
                                     color = Color.White,
-                                    fontSize = 26.sp,
+                                    fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = "Search for movies, series, or live TV channels",
                                     color = LumeTextSecondary,
-                                    fontSize = 15.sp,
+                                    fontSize = 11.5.sp,
                                     textAlign = TextAlign.Center
                                 )
                             }
@@ -400,13 +400,13 @@ fun TvSearchScreen(
                                 Text(
                                     text = "No Results",
                                     color = Color.White,
-                                    fontSize = 22.sp,
+                                    fontSize = 16.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = "No matches found for \"$debouncedSearchText\"",
                                     color = LumeTextSecondary,
-                                    fontSize = 15.sp
+                                    fontSize = 11.5.sp
                                 )
                             }
                         }
@@ -423,7 +423,7 @@ fun TvSearchScreen(
                             Text(
                                 text = "${searchResults.size} Results",
                                 color = LumeTextSecondary,
-                                fontSize = 13.sp,
+                                fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(bottom = 12.dp)
                             )
@@ -533,12 +533,12 @@ private fun TvSearchInputBar(
 
     Row(
         modifier = Modifier
-            .width(580.dp)
-            .height(50.dp)
+            .width(540.dp)
+            .height(42.dp)
             .scale(scale)
-            .clip(RoundedCornerShape(25.dp))
+            .clip(RoundedCornerShape(21.dp))
             .background(Color.White.copy(alpha = if (isFocused) 0.18f else 0.10f))
-            .border(if (isFocused) 2.dp else 1.dp, borderColor, RoundedCornerShape(25.dp))
+            .border(if (isFocused) 2.dp else 1.dp, borderColor, RoundedCornerShape(21.dp))
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { keyEvent ->
                 if (keyEvent.type == KeyEventType.KeyDown) {
@@ -554,15 +554,15 @@ private fun TvSearchInputBar(
                     }
                 } else false
             }
-            .padding(horizontal = 18.dp),
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Icon(
             imageVector = Icons.Default.Search,
             contentDescription = "Search",
             tint = if (isFocused) Color.White else Color.White.copy(alpha = 0.60f),
-            modifier = Modifier.size(22.dp)
+            modifier = Modifier.size(18.dp)
         )
 
         Box(
@@ -573,7 +573,7 @@ private fun TvSearchInputBar(
                 Text(
                     text = "Movies, Series, Live TV...",
                     color = Color.White.copy(alpha = 0.40f),
-                    fontSize = 15.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Normal
                 )
             }
@@ -584,7 +584,7 @@ private fun TvSearchInputBar(
                 singleLine = true,
                 textStyle = TextStyle(
                     color = Color.White,
-                    fontSize = 15.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 ),
                 cursorBrush = SolidColor(LumeAccentBlue),
@@ -683,13 +683,13 @@ private fun TvSearchFilterSegmentedRow(
                         indication = null,
                         onClick = { onSelectFilter(filter) }
                     )
-                    .padding(horizontal = 16.dp, vertical = 7.dp),
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = filter.label,
                     color = textCol,
-                    fontSize = 13.sp,
+                    fontSize = 11.sp,
                     fontWeight = if (isSelected || isFocused) FontWeight.Bold else FontWeight.Medium
                 )
             }
@@ -778,12 +778,12 @@ private fun TvSearchResultCard(
                     .padding(6.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(badgeColor.copy(alpha = 0.85f))
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
             ) {
                 Text(
                     text = badgeText,
                     color = Color.White,
-                    fontSize = 10.sp,
+                    fontSize = 8.5.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -793,7 +793,7 @@ private fun TvSearchResultCard(
         Text(
             text = item.title,
             color = if (isFocused) Color.White else Color.White.copy(alpha = 0.85f),
-            fontSize = 13.sp,
+            fontSize = 11.sp,
             fontWeight = if (isFocused) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -804,7 +804,7 @@ private fun TvSearchResultCard(
             Text(
                 text = item.subtitle,
                 color = LumeTextSecondary,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
