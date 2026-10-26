@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "org.getlume.android"
+    namespace = "org.getlumeroid.android"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "org.getlume.android"
+        applicationId = "org.getlumeroid.android"
         minSdk = 30
         targetSdk = 35
         versionCode = 1

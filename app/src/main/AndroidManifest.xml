@@ -23,13 +23,13 @@
         android:required="false" />
 
     <application
-        android:name=".LumeApp"
+        android:name=".LumeroidApp"
         android:allowBackup="true"
         android:banner="@drawable/banner"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Lume"
+        android:theme="@style/Theme.Lumeroid"
         android:largeHeap="true"
         android:usesCleartextTraffic="true">
 

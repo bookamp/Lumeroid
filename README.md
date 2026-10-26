@@ -1,4 +1,4 @@
-# Lume for Android & Android TV
+# Lumeroid for Android & Android TV
 
 > **Next-generation native IPTV client for Google TV, NVIDIA Shield TV, Fire TV, tablets, and phones.**  
 > Crafted with Jetpack Compose for TV, Material 3, Media3 ExoPlayer, and Room SQLite. Built for complete feature and design parity with Apple TV Lume.
@@ -7,7 +7,7 @@
 
 ## Overview
 
-Lume is a sleek, modern, and high-performance IPTV streaming client engineered specifically for 10-foot television experiences as well as mobile handheld devices. 
+Lumeroid is a sleek, modern, and high-performance IPTV streaming client engineered specifically for 10-foot television experiences as well as mobile handheld devices. 
 
 It connects natively with **Xtream Codes API** and **M3U/M3U8 playlists**, offering zero-latency channel navigation, an EPG guide, high-definition VOD movies and series catalogs, a real-time live sports hub with auto-matched IPTV streams, multi-view streaming (up to 4 feeds simultaneously), and local network device management.
 
@@ -66,8 +66,8 @@ It connects natively with **Xtream Codes API** and **M3U/M3U8 playlists**, offer
 ```
 app/src/main/
 ├── AndroidManifest.xml
-├── java/org/getlume/android/
-│   ├── LumeApp.kt                         # Application entry point & service initialization
+├── java/org/getlumeroid/android/
+│   ├── LumeroidApp.kt                     # Application entry point & service initialization
 │   ├── MainActivity.kt                    # Root activity orchestrating TV vs Mobile layouts
 │   ├── core/
 │   │   ├── data/                          # Room database, entities, and DAOs
@@ -102,7 +102,7 @@ app/src/main/
 ```bash
 adb connect <DEVICE_IP>:5555
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n org.getlume.android.debug/org.getlume.android.MainActivity
+adb shell am start -n org.getlumeroid.android.debug/org.getlumeroid.android.MainActivity
 ```
 
 ---
